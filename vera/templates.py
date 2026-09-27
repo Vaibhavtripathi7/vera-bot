@@ -180,6 +180,64 @@ def _customer_offer(ctx: Ctx) -> str:
     return ""
 
 
+HOOK_PREF = {  # trigger family -> preferred content ids (fallback: keyword match, then first item)
+    "c_trial": ("pc_first_30_days", "pc_pt_or_solo"), "c_lapsed": ("pc_first_30_days", "pc_oral_heart", "pc_post_color_care"),
+    "c_recall": ("pc_oral_heart", "pc_kid_brushing", "pc_post_color_care", "pc_first_30_days"),
+    "c_refill": ("pc_generic_branded",), "c_generic": ("pc_oral_heart", "pc_first_30_days", "pc_storage", "pc_thali_economics"),
+}
+
+
+HOOK_SENT = {  # curated strongest line per known content item (regex over its sentences)
+    "pc_oral_heart": r"simplest action", "pc_kid_brushing": r"sensory|pediatric dental consult",
+    "pc_aligner_vs_braces": r"Aligners work for", "pc_first_30_days": r"Real strength|Most people quit",
+    "pc_pt_or_solo": r"Hybrid", "pc_protein_basics": r"Active adults", "pc_keratin_safe": r"Citric-acid alternatives",
+    "pc_balayage_vs_highlights": r"Balayage holds", "pc_post_color_care": r"Skip these", "pc_generic_branded": r"typically 40-60% cheaper",
+    "pc_summer_basics": r"heat-stroke", "pc_thali_economics": r"Buying these separately", "pc_ordering_smart": r"filter out 80%",
+}
+HOOK_SKIP = {"pc_storage"}
+
+
+def _value_hook(ctx: Ctx) -> tuple[str, str]:
+    """One grounded, customer-level reason to act, quoted from the category's patient_content_library."""
+    lib = [x for x in ctx.category.get("patient_content_library") or [] if x.get("body")]
+    if not lib:
+        return "", ""
+    c = ctx.customer or {}
+    ident, rel = c.get("identity") or {}, c.get("relationship") or {}
+    blob = " ".join(map(str, [ident.get("age_band"), ident.get("name"), (c.get("preferences") or {}).get("training_focus"),
+                              (c.get("preferences") or {}).get("health_focus")] + list(rel.get("services_received") or []))).lower()
+    item = None
+    if "child" in blob or "kid" in blob or "parent" in blob:
+        item = next((x for x in lib if re.search(r"child|kid", x.get("title", ""), re.I)), None)
+    if not item and re.search(r"colou?r|balayage|highlight", blob):
+        item = next((x for x in lib if "colour" in x.get("title", "").lower() or "balayage" in x.get("title", "").lower()), None)
+    if not item:
+        for pid in HOOK_PREF.get(ctx.family, ()):
+            item = next((x for x in lib if x.get("id") == pid), None)
+            if item:
+                break
+    if not item and ctx.family == "c_generic":
+        item = lib[0]
+    if not item or item.get("id") in HOOK_SKIP:
+        return "", ""
+    sents = [x.strip().rstrip(".") for x in re.split(r"(?<=[.!?])\s+(?=[A-Z(])", item["body"]) if 20 <= len(x.strip()) <= 170]
+    pref = HOOK_SENT.get(item.get("id"))
+    chosen = [x for x in sents if pref and re.search(pref, x)][:2]
+    if chosen:
+        hook = " — ".join(chosen[:1] + [c[0].lower() + c[1:] for c in chosen[1:]])
+    else:
+        clean = [x for x in sents if not re.match(r"^[(\d]|^\w+( \d+-\d+)?:", x)]
+        if not clean:
+            return "", ""
+        score = lambda t: (2 if re.search(r"\b(every|start|best|simplest|most|cheaper|reduces|protects)\b", t, re.I) else 0) + \
+            (1 if re.search(r"\d", t) else 0) - (1 if re.search(r"\b(if|but)\b", t, re.I) else 0)
+        hook = max(clean, key=score)
+    hook = re.sub(r"^(The simplest action|Try|Three rules|Five items):\s*", "", hook)
+    hook = hook[0].upper() + hook[1:]
+    ctx.fs.allow_text(hook)
+    return hook, hook
+
+
 def _last_service(ctx: Ctx) -> str:
     svcs = [s for s in ((ctx.customer or {}).get("relationship") or {}).get("services_received") or [] if s and s != "..."]
     return humanize(svcs[-1]).replace(" x", " ×") if svcs else ""
@@ -265,13 +323,14 @@ def f_research(ctx: Ctx) -> Draft:
     rel_hi = f"Yeh {ctx.clause(cohort)} ke liye relevant hai" if cohort else f"Aapke {fs.noun[0]} ke case-mix ke liye relevant hai"
     act = d.get("actionable", "")
     if ctx.hi:
-        body = _join(f"{fs.salutation}, {src} mein ek kaam ka {n}study aaya hai: {title}",
+        body = _join(f"{fs.salutation}, {src} mein ek kaam ka {n}{'study' if d.get('kind') == 'research' else 'update'} aaya hai: {title}",
                      gist, rel_hi + (f" — {act.lower()}" if act else ""),
                      _cta(ctx, (), ("2-min summary + ek patient-education WhatsApp draft bhej doon?",
                                     "Abstract aur patients ke liye ek short WhatsApp draft kar doon?")))
     else:
-        body = _join(ctx.pick(f"{fs.salutation}, new in {src}: {title} ({n}study)",
-                              f"{fs.salutation}, {src} just published a {n}study — {title}"),
+        noun = "study" if d.get("kind") == "research" else "update"
+        body = _join(ctx.pick(f"{fs.salutation}, new in {src}: {title}" + (f" ({n}{noun})" if n else ""),
+                              f"{fs.salutation}, {src} just published a {n}{noun} — {title}"),
                      gist, rel_en + (f" — {act[0].lower() + act[1:]}" if act else ""),
                      _cta(ctx, ("Want me to send the 2-min summary plus a patient-education WhatsApp you can forward?",
                                 "Shall I pull the abstract and draft a short patient WhatsApp from it?"), ()))
@@ -424,8 +483,8 @@ def f_perf_spike(ctx: Ctx) -> Draft:
         hook = hhook = f"{kind} — {'; '.join(phrases[:2])}"
         used = None
     else:
-        up = next((i for i in ctx.insights if i.id.startswith("wow_") and "spike" in i.tags), None) or \
-            next((i for i in ctx.insights if "strength" in i.tags), None)
+        up = next((i for i in ctx.insights if "strength" in i.tags), None) or \
+            next((i for i in ctx.insights if i.id.startswith("wow_") and "spike" in i.tags), None)
         if up:
             hook, hhook, used = up.en, up.hi, up
         else:
@@ -454,12 +513,19 @@ def f_milestone(ctx: Ctx) -> Draft:
         hhook = f"aap {fmt_int(now_v)} {metric} pe ho — {fmt_int(target)} se sirf {gap} door" if gap > 0 else f"aapne {fmt_int(target)} {metric} cross kar liye"
         used = None
     else:
-        up = next((i for i in ctx.insights if "strength" in i.tags or "spike" in i.tags), None)
-        if not up:
+        views, calls = fs.get("perf.views"), fs.get("perf.calls")
+        up = next((i for i in ctx.insights if "strength" in i.tags), None)
+        leading = any(i.id in ("calls_lead", "views_lead", "ctr_lead") for i in ctx.insights)
+        if views and calls:
+            hook = (f"you've had a strong stretch — {views} and {calls} in the last 30 days" if leading
+                    else f"your profile is building up — {views} and {calls} in the last 30 days")
+            hhook = (f"aap achhe phase mein ho — pichhle 30 din mein {views} aur {calls}" if leading
+                     else f"aapka profile build ho raha hai — pichhle 30 din mein {views} aur {calls}")
+            used = None
+        elif up:
+            hook, hhook, used = f"you've hit a good stretch — {up.en}", f"aap achhe phase mein ho — {up.hi}", up
+        else:
             return f_generic(ctx)
-        hook = f"you've hit a good stretch — {up.en}"
-        hhook = f"aap achhe phase mein ho — {up.hi}"
-        used = up
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hhook}", "Abhi happy regulars se ek chhota review request bhejein toh next milestone is hafte pakka ho sakta hai",
                      "Maine request message draft kar diya hai — bhej doon?")
@@ -484,10 +550,12 @@ def f_review_theme(ctx: Ctx) -> Draft:
         if neg:
             hook, hhook, q, used = neg.en, neg.hi, "", neg
         else:
-            top = ctx.insight(prefer=("visibility", "perf"), exclude=("cohort_", "seasonal_now", "trend"))
-            hook = f"a common theme is building up in your recent reviews" + (f", while {top.en}" if top else "")
-            hhook = f"aapke recent reviews mein ek common theme ban raha hai" + (f", aur {top.hi}" if top else "")
-            q, used = "", top
+            calls, views = fs.get("perf.calls"), fs.get("perf.views")
+            stake = f" — with {views} and {calls} in the last 30 days, searchers read these before they call" if calls and views else ""
+            hstake = f" — 30 din mein {views} aur {calls}; log call karne se pehle yahi reviews padhte hain" if calls and views else ""
+            hook = f"the same point is coming up again in your recent reviews{stake}"
+            hhook = f"aapke recent reviews mein ek hi baat baar-baar aa rahi hai{hstake}"
+            q, used = "", None
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hhook}{q}", "Public reply + ek chhota fix se agle reviews badal jaate hain",
                      "Maine polite replies draft kiye hain — bhej doon?")
@@ -866,7 +934,7 @@ def f_curious(ctx: Ctx) -> Draft:
     elif offers:
         guess = Insight("offers_guess", 1, f"still '{offers[0]}'", f"abhi bhi '{offers[0]}'", ())
     else:
-        guess = next((i for i in ctx.insights if i.id.startswith("review_pos_")), None) or next((i for i in ctx.insights if i.id == "trend"), None)
+        guess = next((i for i in ctx.insights if i.id.startswith("review_pos_")), None)
     quote = next((t.get("common_quote") for t in ctx.merchant.get("review_themes") or []
                   if t.get("sentiment") == "pos" and t.get("common_quote")), None)
     if guess and guess.id == "offers_guess":
@@ -881,7 +949,7 @@ def f_curious(ctx: Ctx) -> Draft:
                      g_hi, "Is hafte sabse zyada kya poocha gaya?")
     else:
         body = _join(f"{fs.salutation}, {anchor_en}I can turn this week's most-asked-for service into a Google post plus a ready price-reply for customer queries (5 minutes, tops)",
-                     g_en, "Which one's been most in demand this week?")
+                     g_en, "Which one's been most in demand this week?" if guess else "What's been most asked-for this week?")
     return _draft(ctx, body, "open_ended", "what's in demand this week", "weekly curious-ask; guess grounded in reviews/trends",
                   "gbp_post+price_reply", [guess], "asking the merchant + reciprocity")
 
@@ -995,12 +1063,14 @@ def f_c_recall(ctx: Ctx) -> Draft:
         cta_hi = "YES reply karein, hum " + (f"{pref} " if pref else "") + "slots bhej denge."
         slot_en = slot_hi = ""
         cta = "binary_yes_no"
+    hook, _ = _value_hook(ctx) if not slots else ("", "")
     if ctx.hi:
-        body = _join(_c_open(ctx), f"{hkid}{svc} due hai" + (f" (last visit {last})" if last else ""), slot_hi,
-                     (f"{price} hi rahega" if price else ""), cta_hi)
+        body = _join(_c_open(ctx), f"{hkid}{svc} due hai" + (f" (last visit {last})" if last else ""), (f"Yaad dila dein: {hook}" if hook else ""), slot_hi,
+                     ((f"{price} hi rahega" if fs.category == "dentists" else f"'{price}' bhi available hai") if price else ""), cta_hi)
     else:
-        body = _join(_c_open(ctx), f"{kid}{svc} is due" + (f" — last visit was {last}" if last else ""), slot_en,
-                     (f"Same {price}" if price else ""), cta_en)
+        body = _join(_c_open(ctx), f"{kid}{svc} is due" + (f" — last visit was {last}" if last else ""),
+                     (f"Quick reminder why it matters: {hook[0].lower() + hook[1:]}" if hook else ""), slot_en,
+                     ((f"Same {price}" if fs.category == "dentists" else f"'{price}' is also open for you") if price else ""), cta_en)
     return _draft(ctx, body, cta, svc, "recall due; real slots/price from trigger + merchant offer; language pref honoured", "booking",
                   [], "timeliness + low-friction booking")
 
@@ -1072,13 +1142,15 @@ def f_c_lapsed(ctx: Ctx) -> Draft:
         hsince = f"aapki last visit {last} ko thi" + (f" — lagbhag {months} mahine" if months else "")
     else:
         since, hsince = "it's been a while since your last visit", "kaafi time ho gaya aapse mile"
+    hook, _ = _value_hook(ctx) if not offer else ("", "")
     if ctx.hi:
-        body = _join(_c_open(ctx), f"{hsince} — koi baat nahi, sabke saath hota hai",
+        body = _join(_c_open(ctx), f"{hsince} — koi baat nahi, sabke saath hota hai", (f"Ek kaam ki baat: {hook}" if hook else ""),
                      ((f"Aapke {focus} goal ke liye" if focus else "Wapas shuru karne ke liye") + f" '{offer}' ready hai") if offer else
                      (f"Aapke {focus} goal mein phir se madad karna chahenge" if focus else "Aapko phir se dekhna achha lagega"),
                      "Agle " + (f"{pref} " if pref else "") + "slot mein aapke liye jagah rakh dein? YES reply karein — koi commitment nahi.")
     else:
         body = _join(_c_open(ctx), f"{since} — happens to everyone, no judgment",
+                     (f"Worth knowing: {hook[0].lower() + hook[1:]}" if hook else ""),
                      ((f"For your {focus} goal, " if focus else "To ease back in, ") + f"'{offer}' is open for you") if offer else
                      (f"We'd love to help you get back to your {focus} goal" if focus else "We'd love to see you again"),
                      "Want us to hold a " + (f"{pref} " if pref else "") + "spot for you? Reply YES — no commitment.")
@@ -1097,14 +1169,19 @@ def f_c_trial(ctx: Ctx) -> Draft:
     unit = "session" if fs.category == "gyms" else "appointment"
     if not trial:
         trial = fs.get("cust.last_visit")
+    hook, _ = _value_hook(ctx)
+    pref, _p = _slot_phrase(((ctx.customer or {}).get("preferences") or {}).get("preferred_slots"))
+    slot_en = opts[0] if opts else (f"a {pref} slot" if pref else "")
     if ctx.hi:
         body = _join(_c_open(ctx), (f"{kid} ka trial" if kid else "Aapka trial") + (f" ({trial})" if trial else "") + " kaisa raha?",
-                     (f"Agla {unit}: {opts[0]}" if opts else "") + (f" — continue karne ke liye '{offer}' available hai" if offer else ""),
-                     f"Agla {unit} book kar dein? YES reply karein.")
+                     (f"Ek kaam ki baat: {hook}" if hook else ""),
+                     (f"'{offer}' ke saath continue kar sakte hain" if offer else ""),
+                     f"{('Agla ' + unit + ' ' + slot_en + ' pe') if slot_en else 'Agla ' + unit} book kar dein? YES reply karein.")
     else:
         body = _join(_c_open(ctx), (f"hope {kid} enjoyed the trial" if kid else "hope you enjoyed your trial") + (f" on {trial}" if trial else ""),
-                     (f"The next {unit} is {opts[0]}" if opts else "") + (f"{'; ' if opts else ''}'{offer}' is open if you'd like to continue" if offer else ""),
-                     f"Shall we book your next {unit}? Reply YES.")
+                     (f"Worth knowing: {hook[0].lower() + hook[1:]}" if hook else ""),
+                     (f"'{offer}' is open if you'd like to keep going" if offer else ""),
+                     f"Shall we book your next {unit}{(' — ' + slot_en) if slot_en else ''}? Reply YES.")
     return _draft(ctx, body, "binary_yes_no", "trial follow-up", "trial follow-up with next real session", "hold_slot", [],
                   "momentum + single binary")
 
@@ -1136,7 +1213,7 @@ def f_c_generic(ctx: Ctx) -> Draft:
     kind = ctx.trigger.get("kind", "")
     if "refill" in kind:
         intent_en, intent_hi = {
-            "gyms": ("your membership top-up is due", "aapki membership top-up due hai"),
+            "gyms": ("your membership renewal is due", "aapki membership renewal due hai"),
             "restaurants": ("it's about time for your usual order", "aapke usual order ka time ho gaya"),
             "dentists": ("your routine dental follow-up is due", "aapka routine dental follow-up due hai"),
             "salons": ("your regular appointment is due", "aapka regular appointment due hai"),
@@ -1152,10 +1229,12 @@ def f_c_generic(ctx: Ctx) -> Draft:
                        "YES reply karein, hum aapka usual saamaan pickup/delivery ke liye ready rakhenge."),
         "restaurants": ("Reply YES and we'll hold a table for you this week.", "YES reply karein, is hafte aapke liye table rakh denge."),
     }.get(fs.category, ("Reply YES and we'll book a slot for you.", "Slot book karne ke liye YES reply karein."))
+    hook, _ = _value_hook(ctx) if not offer else ("", "")
     if ctx.hi:
-        body = _join(_c_open(ctx), intent_hi + hist_hi, (f"'{offer}' abhi available hai" if offer else ""), ask_hi)
+        body = _join(_c_open(ctx), intent_hi + hist_hi, (f"'{offer}' abhi available hai" if offer else (f"Ek kaam ki baat: {hook}" if hook else "")), ask_hi)
     else:
-        body = _join(_c_open(ctx), intent_en + hist_en, (f"'{offer}' is available right now" if offer else ""), ask_en)
+        body = _join(_c_open(ctx), intent_en + hist_en, (f"'{offer}' is available right now" if offer else
+                                                          (f"Worth knowing: {hook[0].lower() + hook[1:]}" if hook else "")), ask_en)
     return _draft(ctx, body, "binary_yes_no", humanize(ctx.trigger.get("kind") or ""), "customer follow-up with thin payload; grounded in relationship",
                   "booking", [], "relationship + low friction")
 

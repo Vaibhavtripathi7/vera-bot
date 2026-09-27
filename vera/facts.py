@@ -370,8 +370,8 @@ def diagnose(fs: FactSheet, category: dict, merchant: dict, now: datetime | None
     if not active and catalog:
         best = catalog[0]
         out.append(Insight("offer_gap", 0.72,
-                           f"there's no live offer on your profile right now — '{best['title']}' is the standard hook for {fs.noun[2]} like yours",
-                           f"aapke profile pe abhi koi live offer nahi hai — '{best['title']}' jaise {fs.noun[2]} ka standard hook hai",
+                           f"there's no live offer on your profile right now — {fs.noun[2]} like yours usually lead with a service+price hook such as '{best['title']}' (your price, your call)",
+                           f"aapke profile pe abhi koi live offer nahi hai — aise {fs.noun[2]} aksar '{best['title']}' jaisa service+price hook rakhte hain (price aap decide karein)",
                            ("offer", "visibility")))
     for o in offers:
         if o.get("status") == "expired" and o.get("ended"):
