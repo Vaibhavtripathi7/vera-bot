@@ -26,8 +26,18 @@ SUBMITTED_AT = _env("SUBMITTED_AT", "2026-09-27T00:00:00Z")
 # LLM (all optional - bot is fully functional on templates alone)
 LLM_ENABLED = _env("LLM_ENABLED", "1") == "1"
 GEMINI_API_KEY = _env("GEMINI_API_KEY")
-GEMINI_WRITER_MODELS = [m.strip() for m in _env("GEMINI_WRITER_MODELS", "gemini-3.5-flash,gemini-3.8-flash").split(",") if m.strip()]
-GEMINI_CRITIC_MODELS = [m.strip() for m in _env("GEMINI_CRITIC_MODELS", "gemini-3.5-flash-lite,gemini-flash-lite-latest").split(",") if m.strip()]
+GEMINI_WRITER_MODELS = [m.strip() for m in _env("GEMINI_WRITER_MODELS", "gemini-3.5-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite").split(",") if m.strip()]
+GEMINI_CRITIC_MODELS = [m.strip() for m in _env("GEMINI_CRITIC_MODELS", "gemini-flash-lite-latest,gemini-3.5-flash-lite").split(",") if m.strip()]
+# Per-model free-tier limits "model:rpm:rpd,..." (AI Studio dashboard, with ~10-20% headroom). Unlisted models use the
+# role defaults below. Flash models: 5 RPM / 20 RPD; Flash-Lite: 15 RPM / 500 RPD (Sep 2026 free tier).
+GEMINI_LIMITS = {}
+for _item in _env("GEMINI_LIMITS", "gemini-3.5-flash:4:18,gemini-3.6-flash:4:18,gemini-3.7-flash:4:18,gemini-3.8-flash:4:18,"
+                                   "gemini-3.5-flash-lite:12:450,gemini-flash-lite-latest:12:450,gemini-3.1-flash-lite:12:450").split(","):
+    try:
+        _m, _rpm, _rpd = _item.strip().split(":")
+        GEMINI_LIMITS[_m] = (int(_rpm), int(_rpd))
+    except ValueError:
+        pass
 GEMINI_WRITER_MODEL = GEMINI_WRITER_MODELS[0] if GEMINI_WRITER_MODELS else ""
 GEMINI_CRITIC_MODEL = GEMINI_CRITIC_MODELS[0] if GEMINI_CRITIC_MODELS else ""
 GEMINI_WRITER_RPM = _int("GEMINI_WRITER_RPM", 8)

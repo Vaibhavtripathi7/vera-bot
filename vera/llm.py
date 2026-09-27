@@ -108,10 +108,14 @@ class Pool:
         self.writers: list[Provider] = []
         self.critics: list[Provider] = []
         if config.GEMINI_API_KEY:
-            for m in config.GEMINI_WRITER_MODELS:          # separate per-model quotas -> pooled capacity
-                self.writers.append(Gemini(f"gemini:{m}", m, config.GEMINI_API_KEY, config.GEMINI_WRITER_RPM, config.GEMINI_WRITER_RPD))
-            for m in config.GEMINI_CRITIC_MODELS:
-                self.critics.append(Gemini(f"gemini:{m}", m, config.GEMINI_API_KEY, config.GEMINI_CRITIC_RPM, config.GEMINI_CRITIC_RPD))
+            shared: dict[str, Gemini] = {}                 # one Provider (one bucket) per model, even if used in both roles
+            for role, models, rpm, rpd in (("w", config.GEMINI_WRITER_MODELS, config.GEMINI_WRITER_RPM, config.GEMINI_WRITER_RPD),
+                                           ("c", config.GEMINI_CRITIC_MODELS, config.GEMINI_CRITIC_RPM, config.GEMINI_CRITIC_RPD)):
+                for m in models:                           # separate per-model quotas -> pooled capacity
+                    if m not in shared:
+                        lim = config.GEMINI_LIMITS.get(m, (rpm, rpd))
+                        shared[m] = Gemini(f"gemini:{m}", m, config.GEMINI_API_KEY, lim[0], lim[1])
+                    (self.writers if role == "w" else self.critics).append(shared[m])
         if config.GROQ_API_KEY:
             g = Groq("groq", config.GROQ_MODEL, config.GROQ_API_KEY, config.GROQ_RPM, config.GROQ_RPD)
             self.writers.append(g)
