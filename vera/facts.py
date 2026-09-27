@@ -432,7 +432,10 @@ def diagnose(fs: FactSheet, category: dict, merchant: dict, now: datetime | None
             fs.allow_text(q)
             out.append(Insight("trend", 0.5, f"'{q}' searches are up {fmt_pct(d)} YoY",
                                f"'{q}' searches {fmt_pct(d)} YoY badhi hain", ("trend", "demand")))
+    VISIBLE = {"ctr_gap": 0.15, "ctr_lead": 0.15, "calls_gap": 0.15, "views_gap": 0.15, "calls_lead": 0.15, "views_lead": 0.15,
+               "offer_gap": 0.2, "stale_posts": 0.2, "unverified": 0.2, "sub_ending": 0.1, "sub_expired": 0.1}
     for ins in out:          # insight clauses are computed from registered facts -> quotable
         fs.allow_text(ins.en)
+        ins.strength += VISIBLE.get(ins.id, 0.0)
     out.sort(key=lambda i: -i.strength)
     return out

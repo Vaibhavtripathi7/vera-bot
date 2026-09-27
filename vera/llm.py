@@ -66,17 +66,30 @@ class Provider:
 
 
 class Gemini(Provider):
+    """Gemini REST. Thinking must be off/minimal for latency; models differ in which knob they accept
+    (3.x-lite: thinkingLevel=minimal only; 3.8-flash: thinkingBudget=0 only), so we adapt on a 400 and remember."""
+    STYLES = ({"thinkingLevel": "minimal"}, {"thinkingBudget": 0}, None)
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.style = 1 if ("2.5" in self.model or "3.8" in self.model) else 0
+
     async def call(self, client, system, prompt, timeout, max_tokens):
-        gen = {"temperature": 0, "seed": 7, "maxOutputTokens": max_tokens, "responseMimeType": "application/json"}
-        if "2.5" in self.model:  # disable "thinking" - it adds seconds of latency
-            gen["thinkingConfig"] = {"thinkingBudget": 0}
-        body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": gen}
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        r = await client.post(url, json=body, headers={"x-goog-api-key": self.key}, timeout=timeout)
-        r.raise_for_status()
-        data = r.json()
-        return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+        for _ in range(len(self.STYLES)):
+            gen = {"temperature": 0, "seed": 7, "maxOutputTokens": max_tokens, "responseMimeType": "application/json"}
+            if self.STYLES[self.style]:
+                gen["thinkingConfig"] = self.STYLES[self.style]
+            body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": gen}
+            r = await client.post(url, json=body, headers={"x-goog-api-key": self.key}, timeout=timeout)
+            if r.status_code == 400 and ("hinking" in r.text or "invalid argument" in r.text.lower()):
+                self.style = (self.style + 1) % len(self.STYLES)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+        raise RuntimeError("no accepted thinking config")
 
 
 class Groq(Provider):
@@ -95,10 +108,10 @@ class Pool:
         self.writers: list[Provider] = []
         self.critics: list[Provider] = []
         if config.GEMINI_API_KEY:
-            self.writers.append(Gemini("gemini-writer", config.GEMINI_WRITER_MODEL, config.GEMINI_API_KEY,
-                                       config.GEMINI_WRITER_RPM, config.GEMINI_WRITER_RPD))
-            self.critics.append(Gemini("gemini-critic", config.GEMINI_CRITIC_MODEL, config.GEMINI_API_KEY,
-                                       config.GEMINI_CRITIC_RPM, config.GEMINI_CRITIC_RPD))
+            for m in config.GEMINI_WRITER_MODELS:          # separate per-model quotas -> pooled capacity
+                self.writers.append(Gemini(f"gemini:{m}", m, config.GEMINI_API_KEY, config.GEMINI_WRITER_RPM, config.GEMINI_WRITER_RPD))
+            for m in config.GEMINI_CRITIC_MODELS:
+                self.critics.append(Gemini(f"gemini:{m}", m, config.GEMINI_API_KEY, config.GEMINI_CRITIC_RPM, config.GEMINI_CRITIC_RPD))
         if config.GROQ_API_KEY:
             g = Groq("groq", config.GROQ_MODEL, config.GROQ_API_KEY, config.GROQ_RPM, config.GROQ_RPD)
             self.writers.append(g)

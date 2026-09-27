@@ -26,8 +26,10 @@ SUBMITTED_AT = _env("SUBMITTED_AT", "2026-09-27T00:00:00Z")
 # LLM (all optional - bot is fully functional on templates alone)
 LLM_ENABLED = _env("LLM_ENABLED", "1") == "1"
 GEMINI_API_KEY = _env("GEMINI_API_KEY")
-GEMINI_WRITER_MODEL = _env("GEMINI_WRITER_MODEL", "gemini-2.5-flash")
-GEMINI_CRITIC_MODEL = _env("GEMINI_CRITIC_MODEL", "gemini-2.5-flash-lite")
+GEMINI_WRITER_MODELS = [m.strip() for m in _env("GEMINI_WRITER_MODELS", "gemini-3.5-flash,gemini-3.8-flash").split(",") if m.strip()]
+GEMINI_CRITIC_MODELS = [m.strip() for m in _env("GEMINI_CRITIC_MODELS", "gemini-3.5-flash-lite,gemini-flash-lite-latest").split(",") if m.strip()]
+GEMINI_WRITER_MODEL = GEMINI_WRITER_MODELS[0] if GEMINI_WRITER_MODELS else ""
+GEMINI_CRITIC_MODEL = GEMINI_CRITIC_MODELS[0] if GEMINI_CRITIC_MODELS else ""
 GEMINI_WRITER_RPM = _int("GEMINI_WRITER_RPM", 8)
 GEMINI_WRITER_RPD = _int("GEMINI_WRITER_RPD", 200)
 GEMINI_CRITIC_RPM = _int("GEMINI_CRITIC_RPM", 12)

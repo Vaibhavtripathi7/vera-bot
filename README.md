@@ -39,7 +39,7 @@ context push ─► FactSheet (typed, provenance-tagged facts; all arithmetic in
 
 ## Model choice and tradeoffs
 
-- **Writer:** Gemini 2.5 Flash, with thinking disabled for latency. **Critic:** Gemini 2.5 Flash-Lite. **Fallback writer:** Groq Llama-3.3-70B. All run at temperature 0 with a fixed seed, and responses are cached by prompt hash.
+- **Writer:** Gemini 3.5 Flash (with 3.8 Flash pooled in), thinking minimal for latency. **Critic:** Gemini 3.5 Flash-Lite. **Fallback writer:** Groq Llama-3.3-70B. All run at temperature 0 with a fixed seed, and responses are cached by prompt hash.
 - **Free-tier limits** (about 10–15 requests/min) would be blown by one LLM call per message when a tick holds 20 triggers. So the templates are the main product, and the LLM rewrites them in batches when budget allows. The tradeoff is some phrasing variety in exchange for guaranteed grounding and zero timeouts.
 - **Determinism:** the template path is fully deterministic. The LLM path is deterministic within a session through the cache, but depends on the available quota.
 

@@ -15,22 +15,30 @@ from vera.store import Store
 EXP = Path(__file__).resolve().parent.parent / "expanded"
 
 
-def _ctx():
+HEAT = {"id": "trg_heat", "scope": "merchant", "kind": "weather_heatwave", "merchant_id": "m_009_apollo_pharmacy_jaipur",
+        "payload": {"city": "Jaipur", "temp_c": 44, "days": 3, "advisory": "IMD orange alert"}, "urgency": 3, "suppression_key": "heat"}
+
+
+def _ctx(kind="research"):
+    if kind == "event":
+        cat = json.load(open(EXP / "categories" / "pharmacies.json"))
+        m = json.load(open(EXP / "merchants" / "m_009_apollo_pharmacy_jaipur.json"))
+        return cat, m, HEAT
     cat = json.load(open(EXP / "categories" / "dentists.json"))
     m = json.load(open(EXP / "merchants" / "m_001_drmeera_dentist_delhi.json"))
     t = json.load(open(EXP / "triggers" / "trg_001_research_digest_dentists.json"))
     return cat, m, t
 
 
-def _item(store):
-    cat, m, t = _ctx()
+def _item(store, kind="research"):
+    cat, m, t = _ctx(kind)
     return pipeline.make_item(store, cat, m, t, None, None, set(), [])
 
 
-def _run(monkeypatch, fake_writer, fake_critic=None, deadline=6.0):
+def _run(monkeypatch, fake_writer, fake_critic=None, deadline=6.0, kind="event"):
     pipeline.CACHE.clear()
     store = Store(db_path="")
-    it = _item(store)
+    it = _item(store, kind)
 
     async def fake(system, prompt, role="writer", timeout=None, max_tokens=0):
         if role == "writer":
@@ -48,19 +56,32 @@ def _id(prompt):
     return json.loads(prompt.split("Items:\n", 1)[1])[0]["id"]
 
 
-def test_grounded_rewrite_is_used(monkeypatch):
+def test_polish_rewrite_used_for_stiff_family(monkeypatch):
+    captured = {}
+
     async def writer(prompt):
+        captured["base"] = json.loads(prompt.split("Items:\n", 1)[1])[0]["baseline"]
         return {"items": [{"id": _id(prompt), "bodies": [
-            "Dr. Meera, JIDA Oct 2026, p.14 mein ek 2,100-patient trial aaya hai jo aapke 124 high-risk adult patients ke liye kaam ka hai: "
-            "3-month fluoride varnish recall se caries recurrence 38% kam hua vs 6-month. 2-min summary aur patient WhatsApp draft bhej doon?"]}]}
+            "Ramesh, Jaipur mein 3 din tak 44°C ki garmi hai, IMD orange alert ke saath. ORS aur sunscreen counter pe aage rakhein, "
+            "cold/cough peeche. 'Free Home Delivery > ₹499' ke saath customers ke liye ek quick update bhej doon?"]}]}
     it = _run(monkeypatch, writer)
-    assert it.chosen.source == "llm" and "2,100-patient" in it.chosen.body
+    assert it.chosen.source == "llm", pipeline.REJECTS[-1:]
+
+
+def test_research_family_keeps_template_without_llm_call(monkeypatch):
+    calls = []
+
+    async def writer(prompt):
+        calls.append(prompt)
+        return None
+    it = _run(monkeypatch, writer, kind="research")
+    assert it.chosen.source == "template" and not calls
 
 
 def test_fabricated_rewrite_rejected(monkeypatch):
     async def writer(prompt):
         return {"items": [{"id": _id(prompt), "bodies": [
-            "Dr. Meera, 87% of Delhi dentists already switched to 3-month recall per Dr. Kapoor. Want the summary?"]}]}
+            "Ramesh, 87% of Jaipur pharmacies already stock ORS per Dr. Kapoor. Update bhej doon?"]}]}
     it = _run(monkeypatch, writer)
     assert it.chosen.source == "template"
 
@@ -74,11 +95,19 @@ def test_slow_llm_falls_back_within_deadline(monkeypatch):
     assert time.monotonic() - t0 < 3.5 and it.chosen.source == "template"
 
 
+def test_added_fact_in_polish_rejected(monkeypatch):
+    async def writer(prompt):
+        return {"items": [{"id": _id(prompt), "bodies": [
+            "Ramesh, Jaipur 44°C pe hai, 3 din, IMD orange alert — aapke 240 chronic-Rx customers ke liye ORS stock karein. Update bhej doon?"]}]}
+    it = _run(monkeypatch, writer)
+    assert it.chosen.source == "template"
+
+
 def test_critic_picks_best(monkeypatch):
     async def writer(prompt):
         return {"items": [{"id": _id(prompt), "bodies": [
-            "Dr. Meera, JIDA Oct 2026, p.14 ka naya 2,100-patient trial: 3-month fluoride recall se caries 38% zyada kam hua vs 6-month — "
-            "aapke 124 high-risk adult patients ke liye relevant hai. Summary aur ek forward karne layak patient WhatsApp bhej doon?"]}]}
+            "Ramesh, Jaipur mein 3 din tak 44°C ki garmi hai, IMD orange alert ke saath. ORS aur sunscreen counter pe aage rakhein, "
+            "cold/cough peeche. 'Free Home Delivery > ₹499' ke saath customers ke liye ek quick update bhej doon?"]}]}
 
     async def critic(prompt):
         rows = json.loads(prompt)

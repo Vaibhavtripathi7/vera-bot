@@ -18,17 +18,21 @@ from .llm import POOL
 from .templates import Ctx, Draft, render
 from .util import numbers_in, sha
 
-BATCH = 5
-WRITER_SYSTEM = """You are Vera, magicpin's WhatsApp assistant for Indian local merchants. You rewrite a BASELINE draft into the
-best possible WhatsApp message for each item. The baseline is factually correct; your job is to make it sharper, more natural
-and more compelling for this exact reader, WITHOUT adding any new fact.
+BATCH = 3
+# Families where the template is structurally stiff (payload-rendered / generic fallbacks): the LLM polish is
+# preferred here. Elsewhere the rubric-designed template wins unless the critic explicitly rates a rewrite higher.
+POLISH_FAMILIES = {"event", "c_event", "generic", "c_generic"}
+WRITER_SYSTEM = """You are Vera, magicpin's WhatsApp assistant for Indian local merchants. Each item has a BASELINE draft that is
+factually correct and already has the right structure (why-now + one fact, the judgement, what Vera will do, one ask).
+Your ONLY job: make it read like a sharp, natural WhatsApp message from a knowledgeable colleague — fix stiff or list-like
+phrasing (e.g. "heads-up — weather heatwave: Jaipur; 44°C" -> "Heads-up: Jaipur is at 44°C with an IMD orange alert").
 
 Hard rules:
-- Use ONLY facts present in that item's FACTS list or BASELINE. Every number, date, price, name and source must appear there.
-- Keep the baseline's key fact(s), its why-now, and its single ask. The ask/CTA must be the LAST sentence.
-- Respect LANGUAGE exactly (Hinglish = natural Roman-script Hindi-English mix, not formal Hindi).
-- No URLs, no hype, no preamble, no internal jargon or snake_case, no multiple asks.
-- Keep proactive messages to 2-4 sentences (bulleted drafts may stay as lists).
+- Do NOT add any fact, number, name, offer or claim that is not already in the BASELINE. FACTS are context only, not to be added.
+- Keep every number and the offer/price exactly as written. Same or shorter length. ONE ask, as the last sentence, keeping
+  the baseline's ask type (e.g. "Reply YES", a single short question). No extra questions.
+- Respect LANGUAGE exactly (Hinglish = natural Roman-script Hindi-English code-mix; do not switch to full English clauses).
+- No URLs, hype, preamble, emojis beyond the baseline's, internal jargon or snake_case.
 Return JSON: {"items":[{"id":"<id>","bodies":["<variant 1>", "<variant 2 if requested>"]}]}"""
 
 CRITIC_SYSTEM = """You are a STRICT judge for the magicpin AI Challenge scoring WhatsApp messages to Indian merchants/customers.
@@ -50,6 +54,7 @@ class Item:
 
 
 CACHE: dict[str, Draft] = {}
+REJECTS: list[dict] = []          # diagnostics: LLM candidates the validator refused
 STATIC_RULES = "\n".join(["DO:"] + [f"- {r}" for r in playbook.STATIC_DO] + ["DON'T:"] + [f"- {r}" for r in playbook.STATIC_DONT])
 
 
@@ -133,6 +138,17 @@ async def _write_batch(items: list[Item], variants: int, timeout: float):
                                    kind="artifact" if it.ctx.family == "planning" else "proactive")
             if validator.case_study_overlap(body) >= 0.35:
                 v.append("case_study_overlap")
+            base = it.template.body
+            payload = it.ctx.trigger.get("payload") or {}
+            extra_nums = numbers_in(body) - numbers_in(base) - numbers_in(json.dumps(payload, ensure_ascii=False))
+            if extra_nums:
+                v.append("added_numbers:" + ",".join(sorted(extra_nums)))
+            if len(body) > len(base) * 1.15 + 30:
+                v.append("longer_than_baseline")
+            if body.count("?") > max(1, base.count("?")):
+                v.append("extra_questions")
+            if v:
+                REJECTS.append({"id": it.ctx.trigger.get("id"), "violations": v, "body": body})
             if not v:
                 d = Draft(**{**it.template.__dict__, "body": body, "source": "llm"})
                 d.rationale = it.template.rationale
@@ -169,11 +185,13 @@ async def compose_items(items: list[Item], deadline: float) -> None:
         else:
             it.candidates = [it.template]
             todo.append(it)
-    if todo and POOL.enabled:
+    llm_todo = [it for it in todo if it.ctx.family in POLISH_FAMILIES]
+    scores: dict = {}
+    if llm_todo and POOL.enabled:
         remaining = deadline - time.monotonic()
-        batches = [todo[i:i + BATCH] for i in range(0, len(todo), BATCH)]
+        batches = [llm_todo[i:i + BATCH] for i in range(0, len(llm_todo), BATCH)]
         cap = POOL.capacity("writer")
-        variants = 2 if len(todo) <= 5 and cap >= 3 else 1
+        variants = 1
         batches = batches[:max(0, cap)]
         if remaining > 2.0 and batches:
             wtimeout = min(config.LLM_TIMEOUT, remaining - 1.2)
@@ -183,25 +201,27 @@ async def compose_items(items: list[Item], deadline: float) -> None:
             except asyncio.TimeoutError:
                 pass
         remaining = deadline - time.monotonic()
-        scores = {}
-        if remaining > 2.5 and any(len(it.candidates) >= 2 for it in todo) and POOL.capacity("critic") > 0:
+        if remaining > 2.5 and any(len(it.candidates) >= 2 for it in llm_todo) and POOL.capacity("critic") > 0:
             try:
-                scores = await asyncio.wait_for(_critic(todo, min(config.LLM_TIMEOUT, remaining - 1.0)), timeout=remaining - 0.7)
+                scores = await asyncio.wait_for(_critic(llm_todo, min(config.LLM_TIMEOUT, remaining - 1.0)), timeout=remaining - 0.7)
             except asyncio.TimeoutError:
                 scores = {}
+    if todo:
         for it in todo:
             best, best_s = None, -1e9
             for idx, c in enumerate(it.candidates):
                 s = scores.get((it.key[:10], idx))
-                if s is None:
-                    s = det_score(c, it.ctx) * 5 + (0.5 if c.source == "llm" else 0)   # no critic: LLM wins ties (fluency)
+                if s is None:   # no critic score: polish-family rewrites win (template is stiff there); else template wins
+                    s = det_score(c, it.ctx) * 5 + (1.0 if c.source == "llm" and it.ctx.family in POLISH_FAMILIES else 0) \
+                        - (1.0 if c.source == "llm" and it.ctx.family not in POLISH_FAMILIES else 0)
                 else:
                     s += 0.001 * (len(it.candidates) - idx)                           # stable tie-break
                 if s > best_s:
                     best, best_s = c, s
             it.chosen = best or it.template
             if best is not None and best.source == "llm":
-                it.chosen.rationale = (it.chosen.rationale + " Polished by LLM from grounded draft; picked by critic.")[:300]
+                how = "picked by critic" if scores else "same facts, more natural phrasing"
+                it.chosen.rationale = (it.chosen.rationale + f" LLM-polished from the grounded draft ({how}).")[:300]
             CACHE[it.key] = it.chosen
     for it in items:
         if it.chosen is None:
