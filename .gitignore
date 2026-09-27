@@ -1,0 +1,9 @@
+expanded/
+*.zip
+.env
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+.venv/
+eval/out/
