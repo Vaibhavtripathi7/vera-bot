@@ -113,6 +113,10 @@ def resolve_digest(category: dict, trigger: dict) -> dict | None:
         for d in digest:
             if d.get("kind") in want:
                 return d
+    if kind == "research_digest":        # category has no 'research' item: newest knowledge item still beats a generic nudge
+        for d in digest:
+            if d.get("kind") in ("tech", "trend", "cde"):
+                return d
     return None
 
 

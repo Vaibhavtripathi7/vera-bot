@@ -32,16 +32,16 @@ FAMILY_OF_KIND = {
     "customer_lapsed_soft": "c_lapsed", "customer_lapsed_hard": "c_lapsed", "trial_followup": "c_trial",
     "wedding_package_followup": "c_bridal", "bridal_followup": "c_bridal",
 }
-KEYWORD_FAMILY = [  # unknown kinds -> nearest family by keyword
-    (("recall",), "c_recall"), (("appointment", "booking", "noshow", "no_show"), "c_appointment"),
+KEYWORD_FAMILY = [  # unknown kinds -> nearest family by keyword (order matters)
+    (("noshow", "no_show", "missed"), "c_event"), (("recall",), "c_recall"), (("appointment_tomorrow", "reminder"), "c_appointment"),
     (("refill", "prescription"), "c_refill"), (("lapse", "winback", "churn"), "c_lapsed"),
     (("trial",), "c_trial"), (("wedding", "bridal"), "c_bridal"),
-    (("research", "digest", "journal", "study"), "research"), (("regulat", "compliance", "circular", "recall_alert", "alert"), "compliance"),
-    (("dip", "drop", "decline"), "perf_dip"), (("spike", "surge", "jump"), "perf_spike"),
+    (("research", "digest", "journal", "study"), "research"), (("regulat", "compliance", "circular"), "compliance"),
+    (("spike", "surge", "jump", "positive"), "perf_spike"), (("dip", "drop", "decline"), "perf_dip"),
     (("milestone",), "milestone"), (("review",), "review_theme"), (("competitor", "rival"), "competitor"),
     (("festival", "holiday"), "festival"), (("match", "ipl", "cricket"), "ipl"), (("season",), "seasonal_demand"),
-    (("trend", "search"), "trend"), (("weather", "heat", "rain", "monsoon", "news", "event", "closure"), "event"),
-    (("renew", "expir", "subscription"), "renewal"), (("dormant", "inactive", "silent"), "dormant"),
+    (("trend", "search"), "trend"),
+    (("inventory", "stock", "expiry_alert", "shortage"), "event"), (("renew", "expir", "subscription"), "renewal"), (("dormant", "inactive", "silent"), "dormant"),
     (("gbp", "verif", "profile"), "gbp"), (("ask", "question", "poll"), "curious"), (("plan", "intent"), "planning"),
     (("cde", "webinar", "training", "workshop"), "cde"),
 ]
@@ -56,9 +56,9 @@ def family_for(kind: str, scope: str) -> str:
                 fam = f
                 break
     if not fam:
-        fam = "c_generic" if scope == "customer" else "generic"
+        fam = "c_event" if scope == "customer" else "event"
     if scope == "customer" and not fam.startswith("c_"):
-        fam = "c_generic"
+        fam = "c_event"
     if scope != "customer" and fam.startswith("c_"):
         fam = "generic"
     return fam
@@ -393,9 +393,15 @@ def f_perf_spike(ctx: Ctx) -> Draft:
     fs, p = ctx.fs, ctx.payload
     metric, delta = p.get("metric"), p.get("delta_pct")
     driver = humanize(p.get("likely_driver") or "")
+    phrases = payload_phrases(p, fs) if p and not metric else []
     if metric and isinstance(delta, (int, float)):
-        hook = f"your {humanize(metric)} are up {fmt_pct(abs(delta))} this week" + (f" (baseline {p['vs_baseline']})" if p.get("vs_baseline") else "")
-        hhook = f"is hafte aapke {humanize(metric)} {fmt_pct(abs(delta))} badhe hain" + (f" (baseline {p['vs_baseline']})" if p.get("vs_baseline") else "")
+        base = f" (baseline {p['vs_baseline']})" if p.get("vs_baseline") else ""
+        hook = f"your {humanize(metric)} are up {fmt_pct(abs(delta))} this week{base}"
+        hhook = f"is hafte aapke {humanize(metric)} {fmt_pct(abs(delta))} badhe hain{base}"
+        used = None
+    elif phrases:                                   # unseen positive kinds, e.g. review_spike_positive
+        kind = humanize(ctx.trigger.get("kind") or "")
+        hook = hhook = f"{kind} — {'; '.join(phrases[:2])}"
         used = None
     else:
         up = next((i for i in ctx.insights if i.id.startswith("wow_") and "spike" in i.tags), None) or \
@@ -489,7 +495,7 @@ def f_competitor(ctx: Ctx) -> Draft:
                      (f"Aapka '{mine[0]}' already strong hai; " if mine else "") + "ek post jo aapki quality highlight kare, woh draft kar doon?")
     else:
         body = _join(f"{fs.salutation}, heads-up — {hook}",
-                     "I wouldn't match the price" + (f"; your edge is that {strength.en}" if strength else "; compete on trust and experience instead"),
+                     "I wouldn't match the price" + (f" — your edge: {strength.en}" if strength else "; compete on trust and experience instead"),
                      (f"Keep '{mine[0]}' as the entry offer, and " if mine else "") + ctx.pick("want me to draft a post that leans on that?",
                                                                                             "shall I draft a Google post that highlights it?"))
     return _draft(ctx, body, "binary_yes_no", hook, "competitor from trigger; advise against price war", "differentiation_post", [strength],
@@ -633,8 +639,103 @@ def f_trend(ctx: Ctx) -> Draft:
     return _draft(ctx, body, "binary_yes_no", tr.en, "category trend signal", "trend_post", [tr], "curiosity + demand proof")
 
 
+_KEY_FMT = [
+    (r"temp", lambda v: f"{v}°C"), (r"(^|_)days?$|duration_days", lambda v: f"for {v} days"),
+    (r"delta_yoy|_pct$|pct_", lambda v: fmt_pct(v, signed=True) if isinstance(v, float) else f"{v}%"),
+    (r"value_inr|amount|price|_inr$", lambda v: fmt_money(v)), (r"rating", lambda v: f"{v}★"),
+]
+
+
+def payload_phrases(p: dict, fs: FactSheet) -> list[str]:
+    """Turn an unknown trigger payload into short, verifiable phrases (every value is from the payload)."""
+    texts, facts = [], []
+    for k, v in p.items():
+        if k in ("placeholder", "merchant_id", "customer_id", "category") or v in (None, "", [], {}):
+            continue
+        if isinstance(v, str) and not re.fullmatch(r"[a-z0-9_]+", v) and not re.match(r"\d{4}-\d{2}-\d{2}", v) and len(v) > 3:
+            texts.append(v.rstrip("."))
+            continue
+        if isinstance(v, bool) or isinstance(v, (list, dict)):
+            continue
+        label = humanize(re.sub(r"_(7d|30d)$", r" (\1)", k)).replace("(7d)", "in 7 days").replace("(30d)", "in 30 days")
+        val = None
+        for pat, fn in _KEY_FMT:
+            if re.search(pat, k):
+                val = fn(v)
+                break
+        if val is None:
+            val = humanize(v) if isinstance(v, str) else (fmt_int(v) if isinstance(v, (int, float)) and v >= 1000 else str(v))
+        if isinstance(v, str) and re.match(r"\d{4}-\d{2}-\d{2}", v):
+            val = fmt_date(v)
+        fs.allow_text(val)
+        formatted = any(re.search(pat, k) for pat, _ in _KEY_FMT)
+        facts.append(val if formatted and not re.search(r"value|amount|price", k) else f"{label}: {val}")
+    return texts + facts
+
+
+def _related_knowledge(ctx: Ctx, words: str):
+    """Category digest item / seasonal beat that shares vocabulary with the event (for the 'so what')."""
+    toks = {w for w in re.findall(r"[a-z]{4,}", words.lower())} | ({"summer", "heat", "ors", "sunscreen"} if re.search(r"heat|temp", words, re.I) else set()) \
+        | ({"monsoon", "rain"} if re.search(r"rain|monsoon|flood", words, re.I) else set())
+    toks -= _STOP
+    best, best_n = None, 0
+    for d in ctx.category.get("digest") or []:
+        n = len(toks & (set(re.findall(r"[a-z]{4,}", (d.get("title", "") + " " + d.get("summary", "")).lower())) - _STOP))
+        if n > best_n:
+            best, best_n = d, n
+    return best if best_n >= 2 else None
+
+
+_STOP = {"with", "from", "this", "that", "your", "near", "work", "days", "week", "more", "less", "have", "been", "will",
+         "into", "over", "than", "when", "what", "they", "them", "their", "there", "about", "after", "before", "local",
+         "news", "event", "update", "alert", "metro", "metros", "city", "cities", "india", "indian"}
+
+
 def f_event(ctx: Ctx) -> Draft:
-    return f_generic(ctx)
+    fs, p = ctx.fs, ctx.payload
+    kind = humanize(ctx.trigger.get("kind") or "update")
+    phrases = payload_phrases(p, fs)
+    if not phrases:
+        return f_generic(ctx)
+    head = "; ".join(phrases[:3])
+    rel = _related_knowledge(ctx, kind + " " + head)
+    implication = _first_sentence(rel.get("actionable") or rel.get("summary")) if rel else ""
+    offer = _best_offer(ctx)
+    if ctx.hi:
+        body = _join(f"{fs.salutation}, heads-up — {kind}: {head}", implication,
+                     (f"Main '{offer}' ke saath iske hisaab se ek quick update" if offer else "Main iske hisaab se ek quick update") + " customers ke liye draft kar sakti hoon",
+                     "Bhej doon?")
+    else:
+        body = _join(f"{fs.salutation}, heads-up — {kind}: {head}", implication,
+                     "I can draft a quick customer update around this" + (f", leading with '{offer}'" if offer else ""),
+                     ctx.pick("Want me to prepare it?", "Shall I draft it now?"))
+    return _draft(ctx, body, "binary_yes_no", f"{kind}: {head}", f"unseen trigger '{ctx.trigger.get('kind')}' rendered from its own payload" +
+                  (f" + related category item '{rel.get('id')}'" if rel else ""), "event_update", [], "timeliness + effort externalisation")
+
+
+def f_c_event(ctx: Ctx) -> Draft:
+    fs, p = ctx.fs, ctx.payload
+    kind = ctx.trigger.get("kind") or ""
+    slot = p.get("missed_slot_label") or p.get("slot_label")
+    svc = humanize(p.get("service") or "")
+    if slot or "noshow" in kind or "missed" in kind:
+        if ctx.hi:
+            body = _join(_c_open(ctx), (f"{slot} pe aapka appointment" if slot else "Aapka pichhla appointment") + (f" ({svc})" if svc else "") + " miss ho gaya — koi baat nahi",
+                         "Naya time chahiye toh YES reply karein, hum 2 options bhej denge.")
+        else:
+            body = _join(_c_open(ctx), "we missed you" + (f" at your {slot} appointment" if slot else " at your last appointment") + (f" for {svc}" if svc else "") + " — no worries",
+                         "Reply YES and we'll send two new time options.")
+        return _draft(ctx, body, "binary_yes_no", "missed appointment", "no-show follow-up from trigger payload; no-shame reschedule", "booking",
+                      [], "warmth + easy reschedule")
+    phrases = payload_phrases(p, fs)
+    if not phrases:
+        return f_c_generic(ctx)
+    if ctx.hi:
+        body = _join(_c_open(ctx), "; ".join(phrases[:2]), "Koi sawaal ho ya book karna ho toh YES reply karein.")
+    else:
+        body = _join(_c_open(ctx), "; ".join(phrases[:2]), "Reply YES if you'd like us to set it up for you.")
+    return _draft(ctx, body, "binary_yes_no", humanize(kind), f"unseen customer trigger '{kind}' rendered from its payload", "booking", [],
+                  "relevance + low friction")
 
 
 def f_renewal(ctx: Ctx) -> Draft:
@@ -835,9 +936,14 @@ def f_c_recall(ctx: Ctx) -> Draft:
     if slots:
         opts = " or ".join(f"{s}" for s in slots[:2])
         hopts = " ya ".join(slots[:2])
-        cta_en, cta_hi = "Reply 1 or 2 to book — or tell us a time that suits you.", "Book karne ke liye 1 ya 2 reply karein, ya apna time batayein."
-        slot_en, slot_hi = f"We've kept {len(slots[:2])} slots for you: {opts}", f"Aapke liye {len(slots[:2])} slots rakhe hain: {hopts}"
-        cta = "multi_choice_slot"
+        if len(slots) >= 2:
+            cta_en, cta_hi = "Reply 1 or 2 to book — or tell us a time that suits you.", "Book karne ke liye 1 ya 2 reply karein, ya apna time batayein."
+            slot_en, slot_hi = f"We've kept 2 slots for you: {opts}", f"Aapke liye 2 slots rakhe hain: {hopts}"
+            cta = "multi_choice_slot"
+        else:
+            cta_en, cta_hi = "Reply YES to book it — or tell us a time that suits you.", "Book karne ke liye YES reply karein, ya apna time batayein."
+            slot_en, slot_hi = f"We've kept a slot for you: {opts}", f"Aapke liye ek slot rakha hai: {hopts}"
+            cta = "binary_yes_no"
     else:
         cta_en = "Reply YES and we'll share a couple of " + (f"{pref} " if pref else "") + "slots."
         cta_hi = "YES reply karein, hum " + (f"{pref} " if pref else "") + "slots bhej denge."
@@ -982,7 +1088,7 @@ FAMILIES = {
     "seasonal_demand": f_seasonal_demand, "trend": f_trend, "event": f_event, "renewal": f_renewal,
     "winback": f_winback, "dormant": f_dormant, "gbp": f_gbp, "curious": f_curious, "planning": f_planning,
     "generic": f_generic, "c_recall": f_c_recall, "c_appointment": f_c_appointment, "c_refill": f_c_refill,
-    "c_lapsed": f_c_lapsed, "c_trial": f_c_trial, "c_bridal": f_c_bridal, "c_generic": f_c_generic,
+    "c_lapsed": f_c_lapsed, "c_trial": f_c_trial, "c_bridal": f_c_bridal, "c_generic": f_c_generic, "c_event": f_c_event,
 }
 
 

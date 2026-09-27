@@ -88,6 +88,9 @@ class Scheduler:
             if mst.get("opted_out"):
                 skipped.append((tid, "merchant opted out"))
                 continue
+            if customer and s.mstate(f"cust:{customer.get('customer_id')}").get("opted_out"):
+                skipped.append((tid, "customer opted out"))
+                continue
             ok, why = consent_ok(trg, customer)
             if not ok:
                 skipped.append((tid, why))

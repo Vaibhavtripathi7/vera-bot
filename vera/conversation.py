@@ -31,7 +31,8 @@ HOSTILE = [r"useless", r"\bspam", r"bother", r"fraud", r"scam", r"bakwas", r"pag
            r"nonsense", r"irritat", r"harass", r"waste of (my )?time", r"chup", r"bewakoof", r"\bf+u+c*k", r"\bdamn\b",
            r"annoying", r"get lost", r"bloody"]
 DECLINE = [r"not interested", r"no thanks", r"no,? thank", r"nahi chahiye", r"zaroorat nahi", r"interest nahi",
-           r"we'?re good", r"don'?t need", r"no need", r"\bnope\b", r"^\s*no\s*[.!]*\s*$", r"^\s*nahi\s*[.!]*\s*$"]
+           r"we'?re good", r"don'?t need", r"no need", r"\bnope\b", r"^\s*no\s*[.!]*\s*$", r"^\s*nahi\s*[.!]*\s*$",
+           r"\bsaid no\b", r"\bi said\b.*\bno\b", r"mana kiya", r"bola na"]
 LATER = [r"\blater\b", r"\bbusy\b", r"baad mein", r"baad me\b", r"abhi nahi", r"not now", r"call (me )?(later|tomorrow)",
          r"\btomorrow\b", r"\bkal\b", r"next week", r"in a (bit|while)", r"after (\d+|some)", r"give me (some )?time",
          r"thodi der", r"\bevening\b"]
@@ -173,6 +174,11 @@ class ReplyEngine:
                                    rationale="Same canned auto-reply again -> owner not at phone; backing off 4h instead of burning turns.")
             return ReplyAction("end", rationale=f"Auto-reply {n}x with no human response; closing gracefully to avoid spamming.")
         if klass == "opt_out":
+            if role == "customer" and conv.customer_id:           # a customer's STOP never silences the merchant
+                cst = self.store.mstate(f"cust:{conv.customer_id}")
+                cst["opted_out"] = True
+                self.store.save_mstate(f"cust:{conv.customer_id}")
+                return ReplyAction("end", rationale="Customer opted out; suppressing further messages to this customer only.")
             mst["opted_out"] = True
             return ReplyAction("end", rationale="Explicit opt-out/stop request; closing and suppressing further outreach to this merchant.")
         if klass == "hostile":
@@ -190,6 +196,8 @@ class ReplyEngine:
             body = self._t(conv, "Understood — I won't follow up on this. If anything changes, just message 'Hi Vera' anytime.",
                            "Samajh gayi — is baare mein follow-up nahi karungi. Kabhi zaroorat ho toh bas 'Hi Vera' likh dijiye.")
             return self._send(conv, body, "none", "Merchant declined; graceful close without pitching, topic suppressed.")
+        if any(t.get("class") == "decline" for t in conv.turns[:-1]) and klass != "commit":
+            return ReplyAction("end", rationale="Merchant already declined; not pushing further.")
         if klass == "later":
             secs = 86400 if re.search(r"tomorrow|\bkal\b|next week", msg.lower()) else 14400
             return ReplyAction("wait", wait_seconds=secs, rationale=f"Merchant asked for time; backing off {secs // 3600}h.")
@@ -211,6 +219,8 @@ class ReplyEngine:
             body = self._t(conv, "Here's where we are: the draft is ready whenever you want it. Reply YES anytime and I'll publish it.",
                            "Summary: draft ready hai, jab chahein YES reply kar dijiye aur main publish kar doongi.")
             return self._send(conv, body, "binary_yes_no", "Long thread; wrapping up with a clear, low-effort next step.")
+        if klass == "question" and conv.committed and re.search(r"what else|what next|whats next|what's next|aur kya|next kya|anything else|aage kya", msg.lower()):
+            return self._send(conv, self._followon(conv), "binary_yes_no", "Merchant engaged after delivery; offering the next concrete step.")
         if klass == "question":
             return self._send(conv, self._answer(conv, msg), "open_ended", "Answered from context only; re-offered the next step.")
         # info / neutral engagement -> use it
@@ -250,6 +260,17 @@ class ReplyEngine:
 
     def _offer_phrase(self, conv: Conversation) -> str:
         d = conv.deliverable or ""
+        if (conv.language or self._default_lang(conv)) in ("hinglish", "hindi"):
+            return {
+                "digest_summary+patient_whatsapp": "summary + patient WhatsApp draft bhej doon",
+                "compliance_checklist": "compliance checklist bhej doon",
+                "recall_customer_note": "customer note + pickup steps share kar doon",
+                "review_request": "review request bhej doon",
+                "review_replies": "review replies share kar doon",
+                "registration_details": "registration details bhej doon",
+                "renewal+refresh": "renewal process kar doon",
+                "gbp_verification": "verification mein guide kar doon",
+            }.get(d, "taiyaar draft share kar doon")
         return {
             "digest_summary+patient_whatsapp": "send the summary + patient WhatsApp draft",
             "compliance_checklist": "send the compliance checklist",
@@ -262,21 +283,46 @@ class ReplyEngine:
         }.get(d, "share the draft I've prepared")
 
     def _redirect(self, conv: Conversation) -> str:
-        return self._t(conv, f"Meanwhile, shall I {self._offer_phrase(conv)}?", f"Tab tak, kya main {self._offer_phrase(conv)}?")
+        return self._t(conv, f"Meanwhile, shall I {self._offer_phrase(conv)}?", f"Tab tak, {self._offer_phrase(conv)}?")
 
     def _next_step(self, conv: Conversation) -> str:
-        return self._t(conv, f"Next step: I {self._offer_phrase(conv).replace('share', 'share').replace('send', 'send')} — reply YES and it's done.",
-                       f"Next step: main {self._offer_phrase(conv)} — YES reply karein aur ho jayega.")
+        return self._t(conv, f"Next step: I'll {self._offer_phrase(conv)} — reply YES and it's done.",
+                       f"Next step: main {self._offer_phrase(conv).replace(' doon', '').replace(' kar', '')} — YES reply karein aur ho jayega.")
+
+    def _followon(self, conv: Conversation) -> str:
+        category, merchant, trigger, customer = self._contexts(conv)
+        return self._t(conv, "Next up: I'll turn the same draft into a WhatsApp status + a 2-line reply your staff can paste when customers ask. "
+                             "Reply YES and I'll send both here.",
+                       "Next: isi draft se ek WhatsApp status + customers ke sawaal ke liye 2-line ready reply bana doongi. YES reply karein, dono yahin bhej doongi.")
 
     def _answer(self, conv: Conversation, msg: str) -> str:
         category, merchant, trigger, customer = self._contexts(conv)
         low = msg.lower()
-        if re.search(r"price|cost|kitna|charge|fee|₹|rupee", low):
+        if re.search(r"where.*(data|number|info)|source|kahan se|how do you know|data kaha", low):
+            srcs = []
+            if merchant.get("performance"):
+                srcs.append(self._t(conv, "your Google Business Profile insights for the last 30 days", "aapke Google Business Profile ke last 30 din ke insights"))
+            peer = (category.get("peer_stats") or {}).get("scope")
+            if peer:
+                srcs.append(self._t(conv, f"magicpin's benchmark for {humanize(re.sub(r'_?20\d\d$', '', peer))}",
+                                    f"magicpin ka {humanize(re.sub(r'_?20\d\d$', '', peer))} benchmark"))
+            d = resolve_digest(category, trigger) if category else None
+            if d and d.get("source"):
+                srcs.append(d["source"])
+            if (trigger.get("payload") or {}) and not (trigger.get("payload") or {}).get("placeholder"):
+                srcs.append(self._t(conv, "the alert on your account this week", "is hafte aapke account pe aaya alert"))
+            listing = "; ".join(srcs) or self._t(conv, "your magicpin account data", "aapka magicpin account data")
+            return self._t(conv, f"From {listing}. Nothing is estimated. Shall I {self._offer_phrase(conv)}?",
+                           f"Yeh {listing} se hai — kuch bhi andaaza nahi. {self._offer_phrase(conv).capitalize()}?")
+        if re.search(r"price|cost|kitna|charge|fee|₹|rupee|paisa|paise", low):
             offers = _active_offers(merchant) or _catalog(category)[:2]
             amt = (trigger.get("payload") or {}).get("renewal_amount")
             if amt:
                 return self._t(conv, f"The renewal is ₹{amt:,} for the plan. Shall I process it?",
                                f"Renewal ₹{amt:,} ka hai. Process kar doon?")
+            if re.search(r"(cost|charge|pay).*(me|us|this)|mujhe|hume|kitna lagega|kitne ka", low):
+                return self._t(conv, f"No ad spend is needed for this — it's a post/update I draft for you to approve. Shall I {self._offer_phrase(conv)}?",
+                               f"Isme koi ad spend nahi lagta — yeh post/update main draft karti hoon, aap bas approve karein. {self._offer_phrase(conv).capitalize()}?")
             if offers:
                 listing = ", ".join(f"'{o}'" for o in offers[:2])
                 return self._t(conv, f"Current pricing on your profile: {listing}. Shall I use these in the draft?",
@@ -312,6 +358,10 @@ class ReplyEngine:
             body = self._t(conv, "Done — we've noted it and will confirm the exact time shortly. Anything specific we should keep in mind?",
                            "Ho gaya — note kar liya hai, exact time jaldi confirm karenge. Kuch khaas dhyan rakhna ho toh batayein.")
             return self._send(conv, body, "open_ended", "Customer confirmed; acknowledged and moved to scheduling.")
+        if klass == "question" and re.search(r"instead|another|different|other (day|time)|reschedule|monday|tuesday|wednesday|thursday|friday|saturday|sunday|kal|parso", msg.lower()):
+            body = self._t(conv, "Sure — we'll check that day and confirm the closest available time here shortly.",
+                           "Bilkul — us din ka slot check karke jaldi yahin confirm karte hain.")
+            return self._send(conv, body, "none", "Customer asked for a different day; acknowledged without inventing availability.")
         if klass == "question":
             offer = _best_offer(build_ctx(category, merchant, trigger, customer, None)) if merchant else ""
             body = self._t(conv, "Happy to help — " + (f"'{offer}' is available right now. " if offer else "") + "Reply with a day that suits you and we'll book it.",
