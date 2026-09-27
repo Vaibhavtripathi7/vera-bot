@@ -870,11 +870,14 @@ def f_curious(ctx: Ctx) -> Draft:
         quote = None
     g_en = (f"My guess: {guess.en}" + (f" (\"{quote}\")" if quote else "")) if guess else ""
     g_hi = (f"Mera guess: {guess.hi}" + (f" (\"{quote}\")" if quote else "")) if guess else ""
+    views, calls = fs.get("perf.views"), fs.get("perf.calls")
+    anchor_en = f"{fs.biz} got {views} and {calls} in the last 30 days — " if views and calls else ""
+    anchor_hi = f"{fs.biz} ko pichhle 30 din mein {views} aur {calls} mile — " if views and calls else ""
     if ctx.hi:
-        body = _join(f"{fs.salutation}, is hafte {fs.biz} ki sabse zyada demand wali service ko main ek Google post + customers ke liye ready price-reply bana sakti hoon — 5 minute ka kaam",
+        body = _join(f"{fs.salutation}, {anchor_hi}is hafte ki sabse zyada demand wali service ko main ek Google post + customers ke liye ready price-reply bana sakti hoon (5 minute ka kaam)",
                      g_hi, "Is hafte sabse zyada kya poocha gaya?")
     else:
-        body = _join(f"{fs.salutation}, I can turn this week's most-asked-for service at {fs.biz} into a Google post plus a ready price-reply for customer queries — 5 minutes, tops",
+        body = _join(f"{fs.salutation}, {anchor_en}I can turn this week's most-asked-for service into a Google post plus a ready price-reply for customer queries (5 minutes, tops)",
                      g_en, "Which one's been most in demand this week?")
     return _draft(ctx, body, "open_ended", "what's in demand this week", "weekly curious-ask; guess grounded in reviews/trends",
                   "gbp_post+price_reply", [guess], "asking the merchant + reciprocity")
@@ -948,9 +951,10 @@ def _c_open(ctx: Ctx) -> str:
         greet = f"Hi {who}" if who else "Hello"
     emoji = {"dentists": " 🦷", "salons": " ✨", "gyms": " 👋", "restaurants": " 🍽️", "pharmacies": ""}.get(fs.category, "")
     here = f"{fs.biz}" + (f", {fs.locality}" if fs.locality and fs.category == "pharmacies" else "")
+    signer = fs.owner if fs.owner and fs.category not in ("dentists", "pharmacies") else ""
     if ctx.hi:
-        return f"{greet}, {here} se{emoji}"
-    return f"{greet}, {here} here{emoji}"
+        return f"{greet}, {signer + ' — ' if signer else ''}{here} se{emoji}"
+    return f"{greet}, {signer + ' from ' if signer else ''}{here} here{emoji}"
 
 
 def _slot_phrase(slots: str | None) -> tuple[str, str]:
@@ -1055,8 +1059,16 @@ def f_c_lapsed(ctx: Ctx) -> Draft:
     if fs.category in ("pharmacies", "restaurants"):
         return f_c_generic(ctx)
     pref, _ = _slot_phrase((c.get("preferences") or {}).get("preferred_slots"))
-    since = f"it's been about {weeks} weeks" if weeks else "it's been a while since your last visit"
-    hsince = f"lagbhag {weeks} hafte ho gaye" if weeks else "kaafi time ho gaya aapse mile"
+    last, months = fs.get("cust.last_visit"), fs.get("cust.months_since")
+    visits = fs.get("cust.visits")
+    if weeks:
+        since, hsince = f"it's been about {weeks} weeks", f"lagbhag {weeks} hafte ho gaye"
+    elif last:
+        months = months if months and months not in ("0", "1") else None
+        since = f"your last visit was on {last}" + (f", about {months} months ago" if months else "") + (f" (visit #{visits})" if visits and visits not in ("0", "1") else "")
+        hsince = f"aapki last visit {last} ko thi" + (f" — lagbhag {months} mahine" if months else "")
+    else:
+        since, hsince = "it's been a while since your last visit", "kaafi time ho gaya aapse mile"
     if ctx.hi:
         body = _join(_c_open(ctx), f"{hsince} — koi baat nahi, sabke saath hota hai",
                      ((f"Aapke {focus} goal ke liye" if focus else "Wapas shuru karne ke liye") + f" '{offer}' ready hai") if offer else
@@ -1080,6 +1092,8 @@ def f_c_trial(ctx: Ctx) -> Draft:
         return f_c_generic(ctx)
     offer = next((o for o in _active_offers(ctx.merchant) if re.search(r"month|member|plan|combo|package|₹", o, re.I)), "")
     unit = "session" if fs.category == "gyms" else "appointment"
+    if not trial:
+        trial = fs.get("cust.last_visit")
     if ctx.hi:
         body = _join(_c_open(ctx), (f"{kid} ka trial" if kid else "Aapka trial") + (f" ({trial})" if trial else "") + " kaisa raha?",
                      (f"Agla {unit}: {opts[0]}" if opts else "") + (f" — continue karne ke liye '{offer}' available hai" if offer else ""),
@@ -1115,17 +1129,30 @@ def f_c_generic(ctx: Ctx) -> Draft:
     fs = ctx.fs
     offer = _customer_offer(ctx)
     visits = fs.get("cust.visits")
+    last = fs.get("cust.last_visit")
+    kind = ctx.trigger.get("kind", "")
+    if "refill" in kind:
+        intent_en, intent_hi = {
+            "gyms": ("your membership top-up is due", "aapki membership top-up due hai"),
+            "restaurants": ("it's about time for your usual order", "aapke usual order ka time ho gaya"),
+            "dentists": ("your routine dental follow-up is due", "aapka routine dental follow-up due hai"),
+            "salons": ("your regular appointment is due", "aapka regular appointment due hai"),
+        }.get(fs.category, ("your regular refill is due", "aapka regular refill due hai"))
+    elif "trial" in kind:
+        intent_en, intent_hi = ("thanks for trying us out", "humein try karne ke liye shukriya")
+    else:
+        intent_en, intent_hi = ("it's a good time for your next visit", "aapke agle visit ka time ho gaya hai")
+    hist_en = (f" — last visit {last}" if last else "") + (f", {visits} visits so far" if visits and visits not in ("0", "1") else "")
+    hist_hi = (f" — last visit {last}" if last else "") + (f", ab tak {visits} visits" if visits and visits not in ("0", "1") else "")
     ask_en, ask_hi = {
         "pharmacies": ("Reply YES and we'll keep your usual items ready for pickup or delivery.",
                        "YES reply karein, hum aapka usual saamaan pickup/delivery ke liye ready rakhenge."),
         "restaurants": ("Reply YES and we'll hold a table for you this week.", "YES reply karein, is hafte aapke liye table rakh denge."),
     }.get(fs.category, ("Reply YES and we'll book a slot for you.", "Slot book karne ke liye YES reply karein."))
     if ctx.hi:
-        body = _join(_c_open(ctx), "aapko phir se dekhne ka man hai" + (f" — {visits} visits ke liye shukriya" if visits and visits not in ("0", "1") else ""),
-                     (f"'{offer}' abhi available hai" if offer else ""), ask_hi)
+        body = _join(_c_open(ctx), intent_hi + hist_hi, (f"'{offer}' abhi available hai" if offer else ""), ask_hi)
     else:
-        body = _join(_c_open(ctx), "it's a good time for your next visit" + (f" — thanks for the {visits} visits so far" if visits and visits not in ("0", "1") else ""),
-                     (f"'{offer}' is available right now" if offer else ""), ask_en)
+        body = _join(_c_open(ctx), intent_en + hist_en, (f"'{offer}' is available right now" if offer else ""), ask_en)
     return _draft(ctx, body, "binary_yes_no", humanize(ctx.trigger.get("kind") or ""), "customer follow-up with thin payload; grounded in relationship",
                   "booking", [], "relationship + low friction")
 
