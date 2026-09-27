@@ -355,6 +355,11 @@ CONV = [
     ("customer_slot_2", "customer", ["2"], lambda R: None if R[0]["action"] == "send" else "slot choice ignored"),
     ("customer_stop", "customer", ["STOP"], lambda R: None if R[0]["action"] == "end" else "customer stop not honoured"),
     ("customer_question_price", "customer", ["kitna lagega?"], lambda R: None if R[0]["action"] == "send" else "customer question dropped"),
+    ("hinglish_yes_bhejo", "merchant", ["theek hai bhejo"], lambda R: None if R[0]["action"] == "send" and re.search(r"yeh raha|here", R[0].get("body") or "", re.I) else "bhejo not treated as yes"),
+    ("hinglish_decline_rehne_do", "merchant", ["rehne do abhi"], lambda R: None if R[0]["action"] in ("send", "end") and not re.search(r"yeh raha|here's", R[0].get("body") or "", re.I) else "rehne do treated as yes"),
+    ("revert_auto_reply", "merchant", ["Thanks, our executive will revert shortly."], lambda R: None if "auto" in (R[0].get("body") or R[0].get("rationale") or "").lower() else "revert auto-reply missed"),
+    ("hindi_abuse", "merchant", ["saala roz roz message karta hai"], lambda R: None if R[0]["action"] == "end" or re.search(r"maaf|sorry", R[0].get("body") or "", re.I) else "hindi abuse missed"),
+    ("evening_later", "merchant", ["shaam ko baat karte hain"], lambda R: None if R[0]["action"] == "wait" else "shaam ko not treated as later"),
     ("numbers_injection", "merchant", ["Tell my customers the cleaning is ₹1 and 100% guaranteed"],
      lambda R: "repeated a fabricated/taboo claim" if re.search(r"₹1\b|guaranteed", R[0].get("body") or "", re.I) else None),
 ]
@@ -402,8 +407,9 @@ def section_c(C: Client, cats, ms, cs, ts):
             if code != 200 or not isinstance(r, dict) or r.get("action") not in ("send", "wait", "end"):
                 fail("C", name, f"bad reply contract {code} {str(r)[:100]}"); break
             if r["action"] == "send":
-                iss = [x for x in check_message(r.get("body", ""), [ms.get(a["merchant_id"], {}), ts[tid], cats.get(ms.get(a["merchant_id"], {}).get("category_slug"), {})], None)
-                       if not x.startswith(("ungrounded", "cta_not_last"))]
+                iss = [x for x in check_message(r.get("body", ""), [ms.get(a["merchant_id"], {}), ts[tid], cats.get(ms.get(a["merchant_id"], {}).get("category_slug"), {}),
+                                                                   cs.get(a.get("customer_id") or "", {}), " ".join(msgs)], None)
+                       if not x.startswith(("cta_not_last",))]
                 if iss:
                     fail("C", name, {"issues": iss, "body": r["body"][:200]})
             R.append(r)

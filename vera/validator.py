@@ -127,6 +127,54 @@ def _jaccard(a: str, b: str) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+def grounded_numbers(blobs) -> set[str]:
+    """Numbers derivable from raw context objects/texts (incl. fraction->percent and date parts)."""
+    import json as _json
+    s = set()
+    for b in blobs:
+        if not b:
+            continue
+        txt = b if isinstance(b, str) else _json.dumps(b, ensure_ascii=False)
+        s |= numbers_in(txt)
+        for m in re.finditer(r"(?<![\d.])(-?\d*\.\d+)", txt):
+            try:
+                v = abs(float(m.group(1)))
+            except ValueError:
+                continue
+            for x in (v * 100, v):
+                s.add(f"{x:.1f}".rstrip("0").rstrip(".")); s.add(str(round(x)))
+        for m in re.finditer(r"\d{4}-(\d{2})-(\d{2})", txt):
+            s.add(str(int(m.group(2)))); s.add(str(int(m.group(1))))
+    return s
+
+
+def validate_reply(body: str, blobs: list, category: dict | None = None) -> list[str]:
+    """Hard gate for /v1/reply bodies: grounded numbers, no URLs/foreign script/jargon/taboos/echoed injection."""
+    from .util import instruction_like
+    v = []
+    if not body or not body.strip():
+        return ["empty_body"]
+    low = body.lower()
+    if URL_RE.search(body):
+        v.append("url")
+    if any(ch.isalpha() and ord(ch) > 0x24F for ch in body):
+        v.append("non_latin_script")
+    if SNAKE_RE.search(body):
+        v.append("jargon:snake_case")
+    taboos = list(playbook.GLOBAL_TABOOS)
+    if category:
+        taboos += [str(t).split("(")[0].strip() for t in ((category.get("voice") or {}).get("vocab_taboo") or [])]
+    for t in taboos:
+        if t and re.search(r"\b" + re.escape(t.lower()) + r"\b", low):
+            v.append(f"taboo:{t}")
+    if instruction_like(body):
+        v.append("injection_echo")
+    unknown = {n for n in numbers_in(body) if n not in grounded_numbers(blobs) and n not in SAFE_SMALL}
+    if unknown:
+        v.append("unknown_numbers:" + ",".join(sorted(unknown)))
+    return v
+
+
 CASE_STUDY_BODIES: list[str] = []
 
 

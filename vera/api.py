@@ -26,7 +26,18 @@ app = FastAPI(title="Vera bot", docs_url=None, redoc_url=None)
 STORE = Store()
 SCHED = Scheduler(STORE)
 REPLIES = ReplyEngine(STORE)
-LOCK = asyncio.Lock()
+_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _lock() -> asyncio.Lock:
+    """One lock per running event loop (production has exactly one); never shares a lock across loops."""
+    loop = asyncio.get_running_loop()
+    lk = _LOCKS.get(id(loop))
+    if lk is None:
+        if len(_LOCKS) > 8:
+            _LOCKS.clear()
+        lk = _LOCKS[id(loop)] = asyncio.Lock()
+    return lk
 
 
 def _load_case_studies():
@@ -129,7 +140,7 @@ async def tick(request: Request):
     STORE.touch()
     ids = [str(x) for x in (data.get("available_triggers") or []) if x]
     try:
-        async with LOCK:
+        async with _lock():
             out = await asyncio.wait_for(SCHED.tick(data.get("now"), ids), timeout=config.TICK_DEADLINE + 3)
     except Exception as e:  # noqa: BLE001
         log.exception("tick failed: %s", e)
@@ -146,7 +157,7 @@ async def reply(request: Request):
         return {"action": "wait", "wait_seconds": 1800, "rationale": "Unparseable reply payload; waiting."}
     STORE.touch()
     try:
-        async with LOCK:
+        async with _lock():
             act, conv, klass = REPLIES.handle(data)
         out = act.to_json()
         if out.get("action") == "send" and not out.get("body"):

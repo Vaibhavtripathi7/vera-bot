@@ -24,24 +24,31 @@ AUTO_PATTERNS = [
     r"currently (unavailable|away|closed)", r"out of (office|station)", r"business hours", r"this is an auto",
     r"auto[- ]?reply", r"aapki (madad|jaankari) ke liye (bahut[- ]bahut )?shukriya", r"hum jald hi", r"team tak pahuncha",
     r"we have received your (message|query)", r"for (urgent|immediate) (queries|assistance)", r"visit us at",
+    r"(will|shall) revert", r"our (executive|representative|staff) will", r"you have reached", r"office hours", r"please wait for (our|a) (reply|response)",
+    r"hum aapko jald", r"sampark karenge",
 ]
 OPT_OUT = [r"\bstop\b", r"unsubscribe", r"don'?t (message|text|contact|send)", r"do not (message|text|contact|send)",
-           r"mat bhej", r"band karo", r"remove (me|my number)", r"no more messages", r"message mat", r"leave me alone"]
+           r"mat bhej", r"band karo", r"remove (me|my number)", r"no more messages", r"message mat", r"leave me alone",
+           r"\bblock\b", r"report kar", r"don'?t contact", r"msg mat", r"mat karo message"]
 HOSTILE = [r"useless", r"\bspam", r"bother", r"fraud", r"scam", r"bakwa+s", r"pagal", r"shut up", r"idiot", r"stupid",
            r"faltu", r"dimaag mat", r"dimag mat", r"band kar\b", r"bekaar", r"bakwaas", r"tang mat", r"pareshan mat",
            r"nonsense", r"irritat", r"harass", r"waste of (my )?time", r"\bchup (kar|ho|raho)\b", r"bewakoof", r"\bf+u+c*k", r"\bdamn\b",
-           r"annoying", r"get lost", r"bloody"]
+           r"annoying", r"get lost", r"bloody", r"\bsaala\b", r"\bkamina", r"\bgadha\b", r"\bullu\b", r"\bbc\b", r"\bmc\b", r"chutiy",
+           r"dimaag kharab", r"sir kha", r"bhaad mein"]
 DECLINE = [r"not interested", r"no thanks", r"no,? thank", r"nahi chahiye", r"zaroorat nahi", r"interest nahi",
            r"we'?re good", r"don'?t need", r"no need", r"\bnope\b", r"^\s*no\s*[.!]*\s*$", r"^\s*nahi\s*[.!]*\s*$",
-           r"\bsaid no\b", r"\bi said\b.*\bno\b", r"mana kiya", r"bola na"]
+           r"\bsaid no\b", r"\bi said\b.*\bno\b", r"mana kiya", r"bola na", r"rehne do", r"mat karo", r"nahi karna", r"zarurat nahi",
+           r"zarurat nai", r"nai chahiye", r"koi zaroorat nahi", r"no thank you", r"pass\b"]
 LATER = [r"\blater\b", r"\bbusy\b", r"baad mein", r"baad me\b", r"abhi nahi", r"not now", r"call (me )?(later|tomorrow)",
          r"\btomorrow\b", r"\bkal\b", r"next week", r"in a (bit|while)", r"after (\d+|some)", r"give me (some )?time",
-         r"thodi der", r"\bevening\b"]
+         r"thodi der", r"\bevening\b", r"shaam ko", r"raat ko", r"baad mein baat", r"free hokar", r"free ho ke"]
 COMMIT = [r"\byes\b", r"\byeah\b", r"\byep\b", r"\bhaan\b", r"\bhan ji\b", r"\bha ji\b", r"\bji haan\b", r"\bok(ay)?\b",
           r"\bsure\b", r"go ahead", r"let'?s do (it|this)", r"lets do it", r"\bdo it\b", r"kar do", r"kardo", r"\bkaro\b",
           r"send it", r"\bconfirm", r"\bchalo\b", r"theek hai", r"thik hai", r"\bproceed\b", r"please do", r"sounds good",
           r"\bdone\b", r"👍", r"\bagreed\b", r"\binterested\b", r"i want to join", r"judna hai", r"\bchalega\b",
-          r"what'?s next", r"whats next", r"\bbhej do\b", r"\bpublish\b", r"\bbook it\b"]
+          r"what'?s next", r"whats next", r"\bbhej do\b", r"\bpublish\b", r"\bbook it\b", r"\bbhejo\b", r"daal do", r"dal do",
+          r"\blive kar", r"\bbana do\b", r"\bperfect\b", r"\bbadhiya\b", r"\bsahi hai\b", r"\bkar lo\b", r"\bchalu kar",
+          r"^\s*(ha+n?|ji|ok+|k|hmm+ ok)\s*[.!]*\s*$"]
 OFF_TOPIC = [r"\bgst\b", r"income tax", r"\bitr\b", r"\btax\b", r"\bloan\b", r"insurance", r"electricity", r"\bbank\b",
              r"\bvisa\b", r"passport", r"aadhaar", r"\bpan card\b", r"cricket score", r"politic", r"stock market", r"crypto",
              r"file my", r"accountant", r"\bca\b", r"\blegal\b", r"lawyer"]
@@ -52,7 +59,8 @@ HUMAN = [r"call pe", r"phone pe", r"phone par", r"call (kar|kr) (sakte|sakti|sak
 EDIT_HINT = re.compile(r"₹\s?\d+|\bsirf\b|\bonly\b|weekdays?|weekend|rakhna|rakh do|rakho|karo na|kar do na|instead|badal|change (it|the)|"
                        r"\bcatchy\b|chhota|shorter|longer", re.I)
 QUESTION_WORDS = [r"\?", r"\bkya\b", r"\bkitna\b", r"\bkitne\b", r"\bkaise\b", r"\bkab\b", r"\bkyun\b", r"\bhow\b", r"\bwhat\b",
-                  r"\bwhen\b", r"\bwhy\b", r"\bwhich\b", r"\bcost\b", r"\bprice\b", r"\bcharge", r"\bfees?\b", r"\bdetails\b"]
+                  r"\bwhen\b", r"\bwhy\b", r"\bwhich\b", r"\bcost\b", r"\bprice\b", r"\bcharge", r"\bfees?\b", r"\bdetails\b",
+                  r"kaise hoga", r"kitne din", r"kab tak", r"matlab\??$", r"samjha(o|iye)"]
 HINGLISH_MARKERS = {"hai", "hain", "kya", "nahi", "haan", "karo", "kar", "do", "mujhe", "hum", "aap", "bhej", "chahiye",
                     "theek", "accha", "acha", "baad", "mein", "kal", "abhi", "ji", "bhai", "yaar", "kaise", "kitna", "wala"}
 
@@ -322,7 +330,18 @@ class ReplyEngine:
             low = body.lower()
             for q in ("would you", "do you", "can you tell", "what if", "how about"):
                 body = re.sub(re.escape(q), "", body, flags=re.I) if q in low else body
-        return ReplyAction("send", body=re.sub(r"[ \t]+", " ", body).strip(), cta=cta, rationale=rationale)
+        body = re.sub(r"[ \t]+", " ", body).strip()
+        category, merchant, trigger, customer = self._contexts(conv)
+        blobs = [merchant, category, trigger, customer, " ".join(t.get("msg", "") for t in conv.turns if t.get("from") != "bot"),
+                 " ".join(conv.bodies)]           # earlier bot messages already passed the proactive validator
+        issues = validator.validate_reply(body, blobs, category)
+        if issues:
+            safe = self._t(conv, "Noted — I'll check the details and come back to you here shortly.",
+                           "Noted — details check karke yahin jaldi batati hoon.")
+            if any(validator._jaccard(p, safe) >= 0.8 for p in prior):
+                return ReplyAction("wait", wait_seconds=3600, rationale=f"Reply failed safety gate ({issues[0]}); waiting instead.")
+            return ReplyAction("send", body=safe, cta="none", rationale=f"Draft reply failed the safety gate ({', '.join(issues)[:120]}); sent a safe holding reply.")
+        return ReplyAction("send", body=body, cta=cta, rationale=rationale)
 
     def _auto_nudge(self, conv: Conversation) -> str:
         en, hi = self._offer_noun(conv)
@@ -573,8 +592,8 @@ class ReplyEngine:
             return self._t(conv, "Here's the plan: 1) I'll request the verification code, 2) you share it here when it arrives, 3) I'll finish the rest. Reply CONFIRM to start.",
                            "Plan yeh hai: 1) main verification code request karti hoon, 2) code aate hi yahin share kar dijiye, 3) baaki main kar doongi. Shuru karne ke liye CONFIRM reply karein.")
         if d == "attendance_challenge":
-            return self._t(conv, f"Here's the draft: \"{name} 4-Week Consistency Challenge — 12 sessions in 4 weeks, members who finish get a shout-out on our wall.\" Reply CONFIRM and I'll send it to your members.",
-                           f"Draft yeh raha: \"{name} 4-Week Consistency Challenge — 4 hafte mein 12 sessions, complete karne walon ka wall pe shout-out.\" CONFIRM reply karein, members ko bhej doongi.")
+            return self._t(conv, f"Here's the draft: \"{name} 4-Week Consistency Challenge — 3 sessions a week for 4 weeks, members who finish get a shout-out on our wall.\" Reply CONFIRM and I'll send it to your members.",
+                           f"Draft yeh raha: \"{name} 4-Week Consistency Challenge — 4 hafte, hafte mein 3 sessions, complete karne walon ka wall pe shout-out.\" CONFIRM reply karein, members ko bhej doongi.")
         p = trigger.get("payload") or {}
         where = f"{name}{', ' + loc if loc else ''}"
         if d == "seasonal_whatsapp":
