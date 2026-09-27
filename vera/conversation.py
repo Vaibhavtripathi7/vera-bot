@@ -29,7 +29,7 @@ OPT_OUT = [r"\bstop\b", r"unsubscribe", r"don'?t (message|text|contact|send)", r
            r"mat bhej", r"band karo", r"remove (me|my number)", r"no more messages", r"message mat", r"leave me alone"]
 HOSTILE = [r"useless", r"\bspam", r"bother", r"fraud", r"scam", r"bakwa+s", r"pagal", r"shut up", r"idiot", r"stupid",
            r"faltu", r"dimaag mat", r"dimag mat", r"band kar\b", r"bekaar", r"bakwaas", r"tang mat", r"pareshan mat",
-           r"nonsense", r"irritat", r"harass", r"waste of (my )?time", r"chup", r"bewakoof", r"\bf+u+c*k", r"\bdamn\b",
+           r"nonsense", r"irritat", r"harass", r"waste of (my )?time", r"\bchup (kar|ho|raho)\b", r"bewakoof", r"\bf+u+c*k", r"\bdamn\b",
            r"annoying", r"get lost", r"bloody"]
 DECLINE = [r"not interested", r"no thanks", r"no,? thank", r"nahi chahiye", r"zaroorat nahi", r"interest nahi",
            r"we'?re good", r"don'?t need", r"no need", r"\bnope\b", r"^\s*no\s*[.!]*\s*$", r"^\s*nahi\s*[.!]*\s*$",
@@ -45,6 +45,12 @@ COMMIT = [r"\byes\b", r"\byeah\b", r"\byep\b", r"\bhaan\b", r"\bhan ji\b", r"\bh
 OFF_TOPIC = [r"\bgst\b", r"income tax", r"\bitr\b", r"\btax\b", r"\bloan\b", r"insurance", r"electricity", r"\bbank\b",
              r"\bvisa\b", r"passport", r"aadhaar", r"\bpan card\b", r"cricket score", r"politic", r"stock market", r"crypto",
              r"file my", r"accountant", r"\bca\b", r"\blegal\b", r"lawyer"]
+IDENTITY = [r"kaun ho", r"kon ho", r"who (are|is) (you|this)", r"kiska message", r"kis ka message", r"ye kya hai", r"yeh kya hai",
+            r"what is this", r"aap kaun", r"who sent", r"kahan se (message|msg)"]
+HUMAN = [r"call pe", r"phone pe", r"phone par", r"call (kar|kr) (sakte|sakti|sakoge|lo)", r"can you call", r"talk to (a )?(human|person|someone)",
+         r"\bhuman\b", r"\bagent\b", r"real person", r"insaan se", r"kisi se baat", r"baat karni hai", r"number (do|dijiye|share)"]
+EDIT_HINT = re.compile(r"₹\s?\d+|\bsirf\b|\bonly\b|weekdays?|weekend|rakhna|rakh do|rakho|karo na|kar do na|instead|badal|change (it|the)|"
+                       r"\bcatchy\b|chhota|shorter|longer", re.I)
 QUESTION_WORDS = [r"\?", r"\bkya\b", r"\bkitna\b", r"\bkitne\b", r"\bkaise\b", r"\bkab\b", r"\bkyun\b", r"\bhow\b", r"\bwhat\b",
                   r"\bwhen\b", r"\bwhy\b", r"\bwhich\b", r"\bcost\b", r"\bprice\b", r"\bcharge", r"\bfees?\b", r"\bdetails\b"]
 HINGLISH_MARKERS = {"hai", "hain", "kya", "nahi", "haan", "karo", "kar", "do", "mujhe", "hum", "aap", "bhej", "chahiye",
@@ -83,6 +89,10 @@ def classify(message: str, from_role: str, prior_texts: list[str]) -> str:
         return "decline"
     if from_role == "customer" and re.match(r"^\s*(1|2|3|one|two|first|second|pehla|doosra)\b", t):
         return "slot_choice"
+    if _any(HUMAN, t) and not _any(COMMIT, t):
+        return "human"
+    if _any(IDENTITY, t) and not _any(COMMIT, t):
+        return "identity"
     if _any(LATER, t) and not _any([r"\byes\b", r"\bhaan\b", r"go ahead", r"do it"], t):
         return "later"
     if _any(COMMIT, t):          # a "yes" wins over an off-topic aside in the same message (handled inline)
@@ -192,9 +202,13 @@ class ReplyEngine:
             if mst["hostile_count"] >= 2:
                 mst["opted_out"] = True
                 return ReplyAction("end", rationale="Repeated frustration; exiting and suppressing further messages.")
-            body = self._t(conv, "Sorry about that — I won't push. If you'd rather not hear from me, just reply STOP and I'll stop right away.",
-                           "Maaf kijiye — main pressure nahi daalungi. Agar aap messages nahi chahte toh bas STOP reply karein, main turant band kar doongi.")
-            return self._send(conv, body, "none", "Merchant frustrated: one short apology + explicit opt-out path, no pitch.")
+            body = self._t(conv, "Sorry about that — I won't push.", "Maaf kijiye — main pressure nahi daalungi.")
+            if _any(OFF_TOPIC, msg.lower()):
+                body += " " + self._offtopic_note(conv, msg)
+                conv.meta["ca_noted"] = True
+            body += " " + self._t(conv, "If you'd rather not hear from me, just reply STOP and I'll stop right away.",
+                                  "Agar aap messages nahi chahte toh bas STOP reply karein, main turant band kar doongi.")
+            return self._send(conv, body, "none", "Merchant frustrated: short apology, off-topic ask answered honestly, explicit opt-out path, no pitch.")
         if klass == "decline":
             mst.setdefault("declined_families", []).append(conv.family)
             if any(t.get("class") == "decline" for t in conv.turns[:-1]):
@@ -209,10 +223,15 @@ class ReplyEngine:
             return ReplyAction("wait", wait_seconds=secs, rationale=f"Merchant asked for time; backing off {secs // 3600}h.")
         if klass == "off_topic":
             conv.offtopic += 1
-            redirect = self._redirect(conv)
-            body = self._t(conv, f"That one's best handled by your CA — it's outside what I can do here. {redirect}",
-                           f"Woh aapke CA behtar handle karenge — yeh mere scope se bahar hai. {redirect}")
-            return self._send(conv, body, "open_ended", "Off-topic request politely declined; redirected to the open thread.")
+            body = f"{self._offtopic_note(conv, msg)} {self._redirect(conv)}"
+            return self._send(conv, body, "open_ended", "Off-topic request politely declined (topic-aware); redirected to the open thread.")
+        if klass == "identity":
+            body = f"{self._identity(conv)} {self._redirect(conv)}"
+            return self._send(conv, body, "binary_yes_no", "Merchant asked who is messaging; introduced Vera plainly, then one clear next step.")
+        if klass == "human":
+            body = self._t(conv, "Sure — I'll ask the magicpin team to call you. What time works best? Meanwhile the draft is ready whenever you want it.",
+                           "Bilkul — main magicpin team se aapko call karwa deti hoon. Kaunsa time theek rahega? Tab tak draft ready hai, jab chahein dekh lijiye.")
+            return self._send(conv, body, "open_ended", "Merchant wants a human/call: acknowledged, asked for a time, kept the thread open.")
         if role == "customer":
             return self._customer_reply(conv, klass, msg)
         if klass in ("commit", "question", "info") and conv.meta.get("stage", 0) >= 1 and \
@@ -228,7 +247,20 @@ class ReplyEngine:
             aside = self._aside(conv, msg)
             if stage == 0:
                 conv.meta["stage"] = 1
-                art = self._artifact(conv)
+                art = self._curious_followup(conv, msg) if conv.family == "curious" and len(msg) > 12 else self._artifact(conv)
+                edited, art2 = self._apply_price_edit(msg, art)
+                if edited:
+                    art = art2
+                    aside = re.sub(r"Noted — \"[^\"]*\": [^.]*\.\s*", "", aside)
+                    aside += self._t(conv, "Done — updated with your price. ", "Ho gaya — aapka price daal diya. ")
+                elif EDIT_HINT.search(msg) and re.search(r"₹\s?\d", msg):
+                    conv.meta["stage"] = 0      # can't apply safely: acknowledge, don't show a stale draft
+                    return self._send(conv, aside + self._t(conv, "I'll send the updated draft with that change for your final OK.",
+                                                            "Yeh change karke updated draft final OK ke liye bhejti hoon."),
+                                      "open_ended", "Merchant changed the terms; acknowledged instead of re-sending an outdated draft.")
+                if aside and any(core and core in art for core in
+                                 (re.sub(r"^(On cost|Cost):\s*", "", part).strip(" .") for part in re.split(r"(?<=\.)\s", aside))):
+                    aside = ""                   # the artifact already states it (e.g. the fee) - don't repeat
                 m = re.search(r'"([^"]{20,})"', art)
                 if m:
                     conv.meta["artifact_note"] = m.group(1)
@@ -324,20 +356,78 @@ class ReplyEngine:
         en, hi = self._offer_noun(conv)
         return self._t(conv, f"Next step: I'll send {en} — reply YES and it's done.", f"Next step: main {hi} bhej doongi — YES reply karein aur ho jayega.")
 
+    @staticmethod
+    def _apply_price_edit(msg: str, art: str) -> tuple[bool, str]:
+        """'₹120 karo na 25+ ke liye' -> replace the price inside the draft's '25+' tier (only when unambiguous)."""
+        prices = re.findall(r"₹\s?(\d[\d,]*)", msg)
+        tiers = re.findall(r"(\d+)\s*\+", msg)
+        if len(prices) != 1 or len(tiers) != 1:
+            return False, art
+        seg = re.search(rf"({re.escape(tiers[0])}\+[^;\n•]*?₹)(\d[\d,]*)", art)
+        if not seg:
+            return False, art
+        return True, art[:seg.start(2)] + prices[0] + art[seg.end(2):]
+
+    def _identity(self, conv: Conversation) -> str:
+        category, merchant, trigger, customer = self._contexts(conv)
+        biz = ((merchant or {}).get("identity") or {}).get("name") or "your business"
+        return self._t(conv, f"I'm Vera, magicpin's assistant for {biz} — I help with your Google profile, offers and customer messages.",
+                       f"Main Vera hoon, magicpin ki assistant — {biz} ke Google profile, offers aur customer messages mein madad karti hoon.")
+
+    def _offtopic_note(self, conv: Conversation, msg: str) -> str:
+        low = msg.lower()
+        if re.search(r"loan|bank|interest rate|emi", low):
+            return self._t(conv, "Loan rates are best compared with your bank or CA — that's outside what I handle.",
+                           "Loan rates ke liye aapka bank ya CA sahi bata payenge — yeh mere scope se bahar hai.")
+        if re.search(r"insurance", low):
+            return self._t(conv, "An insurance advisor is the right person for that — it's outside what I handle.",
+                           "Insurance ke liye advisor sahi rahenge — yeh mere scope se bahar hai.")
+        if re.search(r"gst|tax|itr|return", low):
+            return self._t(conv, "GST/tax filing is best done by your CA — it's outside what I handle.",
+                           "GST/tax filing ke liye aapke CA sahi rahenge — yeh mere scope se bahar hai.")
+        return self._t(conv, "That's outside what I can help with here.", "Yeh mere scope se bahar hai.")
+
     def _aside(self, conv: Conversation, msg: str) -> str:
         """One-line handling of an off-topic ask or a data-source question inside a 'yes' message."""
         low = msg.lower()
-        out = ""
-        if _any(OFF_TOPIC, low) and not conv.meta.get("ca_noted"):
-            conv.meta["ca_noted"] = True
-            out += self._t(conv, "(GST/filing is best done by your CA — outside what I handle.) ", "(GST/filing ke liye aapke CA sahi rahenge — woh mere scope se bahar hai.) ")
-        if re.search(r"where.*(data|number)|source|kahan se|kaha se|how do you know", low):
-            out += self._t(conv, "(The numbers are from your Google profile insights and magicpin's category benchmark.) ",
-                           "(Numbers aapke Google profile insights aur magicpin ke category benchmark se hain.) ")
-        elif "?" in msg and not out:
-            out += self._t(conv, "(On your question — I'll confirm that detail and update the draft before it goes live.) ",
-                           "(Aapke sawaal pe — woh detail confirm karke draft live hone se pehle update kar doongi.) ")
-        return out
+        out = []
+        if _any(IDENTITY, low):
+            out.append(self._identity(conv))
+        if _any(OFF_TOPIC, low):
+            if not conv.meta.get("ca_noted"):
+                conv.meta["ca_noted"] = True
+                out.append(self._offtopic_note(conv, msg))
+            return " ".join(out) + (" " if out else "")
+        m = EDIT_HINT.search(msg)
+        if m:
+            clause = next((c.strip() for c in re.split(r"[.!?,;]\s*", msg) if EDIT_HINT.search(c)), "")[:80]
+            if clause:
+                out.append(self._t(conv, f"Noted — \"{clause}\": I'll keep that in the final version.",
+                                   f"Noted — \"{clause}\": final version mein yahi rakhungi."))
+        if re.search(r"where.*(data|number)|source|kahan se|kaha se|kidhar se|how do you know", low):
+            out.append(self._t(conv, "The numbers come from your Google profile insights and magicpin's category benchmark.",
+                               "Yeh numbers aapke Google profile insights aur magicpin ke category benchmark se hain."))
+        elif re.search(r"cost|price|kitna|charge|fee|paisa|kitne ka", low):
+            ans = self._fact_answer(conv)
+            if ans:
+                out.append(ans)
+        elif "?" in msg and not out and not conv.meta.get("q_noted"):
+            conv.meta["q_noted"] = True
+            out.append(self._t(conv, "On your question — I'll confirm that detail before anything goes live.",
+                               "Aapke sawaal pe — woh detail live hone se pehle confirm kar doongi."))
+        return " ".join(out) + (" " if out else "")
+
+    def _fact_answer(self, conv: Conversation) -> str:
+        """Cost questions answered only from context (digest fee lines, renewal amount); else nothing."""
+        category, merchant, trigger, customer = self._contexts(conv)
+        amt = (trigger.get("payload") or {}).get("renewal_amount")
+        if amt:
+            return self._t(conv, f"The renewal is ₹{amt:,}.", f"Renewal ₹{amt:,} ka hai.")
+        d = resolve_digest(category, trigger) if category else None
+        if d and re.search(r"₹|free", str(d.get("actionable", "")), re.I):
+            return self._t(conv, f"On cost: {d['actionable'].rstrip('.')}.", f"Cost: {d['actionable'].rstrip('.')}.")
+        return self._t(conv, "No ad spend is needed for this — it's something I draft for you to approve.",
+                       "Isme koi ad spend nahi lagta — yeh main draft karti hoon, aap bas approve karein.")
 
     def _followon(self, conv: Conversation) -> str:
         category, merchant, trigger, customer = self._contexts(conv)
@@ -391,7 +481,10 @@ class ReplyEngine:
         category, merchant, trigger, customer = self._contexts(conv)
         name = (merchant.get("identity") or {}).get("name", "your business")
         locality = (merchant.get("identity") or {}).get("locality", "")
-        svc = re.sub(r"[^\w\s&+₹@-]", "", msg).strip()[:60] or "your top service"
+        offers = _active_offers(merchant) + _catalog(category)
+        words = [w for w in re.findall(r"[a-zA-Z]{4,}", msg.lower()) if w not in {"haan", "theek", "chal", "raha", "hai", "yeah", "this", "week",
+                                                                              "most", "sabse", "zyada", "please", "post", "banao", "karo"}]
+        svc = next((o for o in offers if any(w in o.lower() for w in words)), "") or re.sub(r"[^\w\s&+₹@-]", "", msg).strip()[:60] or "your top service"
         return self._t(conv,
                        f"Done — here's the Google post draft: \"Most-booked at {name}{', ' + locality if locality else ''} this week: {svc}. Walk in or message us to book.\" "
                        "Reply CONFIRM and I'll publish it, then the price-reply snippet comes next.",
@@ -556,10 +649,11 @@ class ReplyEngine:
         offer = _best_offer(build_ctx(category, merchant, trigger, customer, None)) if merchant else ""
         note = conv.meta.get("artifact_note")
         if note:
-            first = _first_sentence(note, 140)
-            status = first
-            reply = (f"Thanks for asking! {offer} is on right now — share a time that suits you and we'll book it."
-                     if offer else "Thanks for asking! Share a time that suits you and we'll take care of it.")
+            sents = re.split(r"(?<=[.!?])\s+", note)
+            status = sents[0] if len(sents[0]) >= 40 or len(sents) == 1 else " ".join(sents[:2])
+            status = status if len(status) <= 150 else status[:147].rsplit(" ", 1)[0] + "…"
+            core = re.sub(r"^(New at|Festive at)\s+", "", status.split(" — ")[0]).rstrip(".:")
+            reply = f"Thanks for asking! {core} — share a day or time that suits you and we'll take care of it."
         else:
             status = f"{offer} at {name} — message us to book!" if offer else f"New this week at {name} — message us to know more!"
             reply = f"Thanks for asking! {offer} is available right now — share a time and we'll book you in." if offer else \
