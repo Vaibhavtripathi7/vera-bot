@@ -90,6 +90,7 @@ class Ctx:
     now: datetime | None
     family: str = ""
     variant: int = 0
+    variant_offset: int = 0
 
     @property
     def hi(self) -> bool:
@@ -987,7 +988,7 @@ FAMILIES = {
 
 def render(ctx: Ctx) -> Draft:
     ctx.family = family_for(ctx.trigger.get("kind", ""), ctx.trigger.get("scope", "customer" if ctx.customer else "merchant"))
-    ctx.variant = stable_index(str(ctx.trigger.get("id", "")) + ctx.family, 2)
+    ctx.variant = stable_index(str(ctx.trigger.get("id", "")) + ctx.family, 2) + ctx.variant_offset
     fn = FAMILIES.get(ctx.family, f_generic)
     try:
         return fn(ctx)
