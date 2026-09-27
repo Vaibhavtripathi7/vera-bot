@@ -149,6 +149,8 @@ async def _write_batch(items: list[Item], variants: int, timeout: float):
                 v.append("longer_than_baseline")
             if body.count("?") > max(1, base.count("?")):
                 v.append("extra_questions")
+            if re.search(r"\d+\s*%\s*off|flat\s+\d+\s*%", body, re.I) and not re.search(r"\d+\s*%\s*off|flat\s+\d+\s*%", base, re.I):
+                v.append("percentage_discount")
             if v:
                 REJECTS.append({"id": it.ctx.trigger.get("id"), "violations": v, "body": body})
             if not v:

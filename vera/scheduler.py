@@ -159,7 +159,7 @@ class Scheduler:
             extra = f" Chosen over {len(cands) - 1} other listed trigger(s) by urgency/stakes." if len(cands) > 1 else ""
             if c["consent"]:
                 extra += f" Consent: {c['consent']}."
-            rationale = (d.rationale + extra + f" Context: {versions}.")[:420]
+            rationale = (d.rationale + f" | Selection:{extra or ' only listed trigger.'} Context: {versions}.")[:900]
             send_as = "merchant_on_behalf" if customer or trg.get("scope") == "customer" else "vera"
             action = {
                 "conversation_id": conv_id, "merchant_id": mid,

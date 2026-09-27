@@ -184,3 +184,21 @@ def test_commit_flow_stages_and_no_loops(client):
         assert expect in bodies[0]
         assert len(set(bodies)) == len(bodies), "a reply body repeated"
         assert actions[-1] == "end" and "Status: \"Dr.\"" not in " ".join(bodies)
+
+
+def test_submission_audit_is_perfect(tmp_path):
+    import bot
+    from eval.audit_submission import audit
+    out = tmp_path / "submission.jsonl"
+    assert bot.make_submission(EXP, out) == 30
+    assert audit(str(out)) == 50.0
+
+
+def test_tick_actions_carry_structured_rationale_and_template(client):
+    push_all(client)
+    acts = client.post("/v1/tick", json={"now": "2026-09-27T10:00:00Z", "available_triggers": ["trg_019_chronic_refill_grandfather"]}).json()["actions"]
+    a = acts[0]
+    assert a["template_name"] and a["template_params"]
+    for k in ("Why now:", "Anchors:", "Lever:", "Guardrails:"):
+        assert k in a["rationale"]
+    assert "%" not in a["body"]

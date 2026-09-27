@@ -36,6 +36,8 @@ def to_message(draft: Draft, trigger: dict, customer: dict | None) -> dict:
         "cta": draft.cta,
         "send_as": "merchant_on_behalf" if customer or trigger.get("scope") == "customer" else "vera",
         "suppression_key": trigger.get("suppression_key") or f"{trigger.get('kind')}:{trigger.get('id')}",
+        "template_name": draft.template_name,
+        "template_params": [str(p) for p in draft.template_params],
         "rationale": draft.rationale,
     }
 
