@@ -1335,28 +1335,75 @@ def f_c_generic(ctx: Ctx) -> Draft:
                   "booking", [], "relationship + low friction")
 
 
+NOT_NAMES = {"grandfather", "grandmother", "anonymous", "new", "customer", "father", "mother", "son", "daughter", "parent",
+             "uncle", "aunt", "guest", "walkin", "unknown", "patient", "member"}
+
+
 def f_via_merchant(ctx: Ctx) -> Draft:
-    """Customer-scope trigger but no customer context: tell the merchant, offer to send the drafted note."""
+    """Customer-scope trigger but no customer context: brief the merchant with the payload facts and offer the drafted note."""
     fs, p = ctx.fs, ctx.payload
     kind = ctx.trigger.get("_orig_kind") or ctx.trigger.get("kind", "").replace("__via_merchant", "")
     m = re.match(r"c_\d+_([a-z]+)", str(ctx.trigger.get("customer_id") or ""))
-    who = m.group(1).capitalize() if m and m.group(1) not in ("anonymous", "new") else f"one of your {fs.noun[1]}"
+    generic_who = {"pharmacies": "a regular chronic-Rx customer", "gyms": "one of your members", "dentists": "one of your patients"}.get(
+        fs.category, f"one of your {fs.noun[1]}")
+    generic_hi = {"pharmacies": "aapke ek regular chronic-Rx customer", "gyms": "aapke ek member", "dentists": "aapke ek patient"}.get(
+        fs.category, "aapke ek customer")
+    who = m.group(1).capitalize() if m and m.group(1) not in NOT_NAMES else ""
     fs.allow_text(who)
-    what = humanize(p.get("service_due") or kind.replace("_due", "")).replace("6 month", "6-month")
-    last = fmt_date(p.get("last_service_date"))
-    slots = [x.get("label") for x in (p.get("available_slots") or []) if x.get("label")]
-    mols = p.get("molecule_list") or []
-    detail = (f" (last visit {last})" if last else "") + (f" — molecules: {', '.join(mols)}" if mols else "")
-    offer = f" with the {' / '.join(slots[:2])} slots" if slots else ""
-    hoffer = f" {' / '.join(slots[:2])} slots ke saath" if slots else ""
-    if ctx.hi:
-        body = _join(f"{fs.salutation}, {who} ka {what} due hai{detail}", f"Maine unka reminder{hoffer} draft kar diya hai, aapke naam se jayega",
-                     V(ctx, "send_hi", "Bhej doon?", "Customers ko bhej doon?", "Shuru karoon?"))
+    W = who or (generic_hi if ctx.hi else generic_who)
+    Wp = f"{who}'s" if who else f"{generic_who}'s"
+    offer = next((o for o in _active_offers(ctx.merchant)), "")
+    hook_en = hook_hi = ""
+    if "wedding" in kind or "bridal" in kind:
+        wed, days, trial = fmt_date(p.get("wedding_date")), p.get("days_to_wedding"), fmt_date(p.get("trial_completed"))
+        raw = str(p.get("next_step_window_open") or "")
+        dm = re.search(r"(\d+)\s*day", raw)
+        step = humanize(re.sub(r"_?\d+\s*day$", "", raw)).replace("skin prep", "skin-prep")
+        step = f"{dm.group(1)}-day {step}" if dm and step else step
+        hook_en = f"{Wp} wedding is on {wed}" + (f", {days} days away" if days else "") + (f", and the bridal trial was on {trial}" if trial else "") + \
+            (f". This is the right window to start the {step}" if step else "")
+        hook_hi = f"{W} ki wedding {wed} ko hai" + (f" ({days} din baaki)" if days else "") + (f", trial {trial} ko hua tha" if trial else "") + \
+            (f". {step} shuru karne ka yahi sahi time hai" if step else "")
+        note_en, note_hi = "a warm follow-up offering her a first-session slot", "unke liye pehle session ka slot offer karta hua ek follow-up"
+    elif "lapsed" in kind or "winback" in kind:
+        d, focus, months = p.get("days_since_last_visit"), humanize(p.get("previous_focus") or ""), p.get("previous_membership_months")
+        hook_en = f"{W} hasn't been in for {d} days" if d else f"{W} hasn't been in for a while"
+        hook_en += (f" (a {months}-month member" + (f", training for {focus}" if focus else "") + ")") if months else (f" (focus: {focus})" if focus else "")
+        hook_hi = f"{W} {d} din se nahi aaye" if d else f"{W} kaafi time se nahi aaye"
+        hook_hi += (f" ({months} mahine ke member" + (f", {focus} goal" if focus else "") + ")") if months else ""
+        note_en = "a no-pressure comeback note" + (f" with '{offer}'" if offer else "")
+        note_hi = "ek no-pressure comeback message" + (f" '{offer}' ke saath" if offer else "")
+    elif "trial" in kind:
+        date = fmt_date(p.get("trial_date")); nxt = next((o.get("label") for o in p.get("next_session_options") or [] if o.get("label")), "")
+        hook_en = f"{W} came for a trial" + (f" on {date}" if date else "") + (f", and the next session is {nxt}" if nxt else "")
+        hook_hi = f"{W} ne" + (f" {date} ko" if date else "") + " trial class li thi" + (f", agla session {nxt} ko hai" if nxt else "")
+        note_en, note_hi = "a follow-up holding that seat", "seat hold karne wala ek follow-up"
+    elif "refill" in kind:
+        mols, runs = p.get("molecule_list") or [], fmt_date(p.get("stock_runs_out_iso"))
+        hook_en = f"{Wp} monthly medicines ({', '.join(mols)}) run out on {runs}" if mols and runs else f"{Wp} monthly refill is due"
+        hook_hi = f"{W} ki monthly dawaiyan ({', '.join(mols)}) {runs} ko khatam hongi" if mols and runs else f"{W} ka monthly refill due hai"
+        if p.get("delivery_address_saved"):
+            hook_en += ", and the delivery address is saved"; hook_hi += ", delivery address saved hai"
+        note_en, note_hi = "the refill reminder with home delivery", "home delivery ke saath refill reminder"
+    elif "appointment" in kind:
+        hook_en, hook_hi = f"{W} has an appointment tomorrow", f"{W} ka kal appointment hai"
+        note_en, note_hi = "a confirmation message", "ek confirmation message"
     else:
-        body = _join(f"{fs.salutation}, {who}'s {what} is due{detail}", f"I've drafted the reminder{offer}, to go out from your number",
-                     "Shall I send it?")
-    return _draft(ctx, body, "binary_yes_no", f"{who} {what}", f"customer-scope '{kind}' without customer context -> merchant approval flow",
-                  "customer_reminder", [], "effort externalisation + single binary")
+        what = humanize(p.get("service_due") or kind.replace("_due", "")).replace("6 month", "6-month")
+        last = fmt_date(p.get("last_service_date"))
+        hook_en = f"{Wp} {what} is due" + (f" (last visit {last})" if last else "")
+        hook_hi = f"{W} ka {what} due hai" + (f" (last visit {last})" if last else "")
+        slots = [x.get("label") for x in (p.get("available_slots") or []) if x.get("label")]
+        note_en = "the reminder" + (f" with the {' / '.join(slots[:2])} slots" if slots else "")
+        note_hi = "reminder" + (f" {' / '.join(slots[:2])} slots ke saath" if slots else "")
+    if ctx.hi:
+        body = _join(f"{fs.salutation}, {hook_hi}", f"Maine {note_hi} draft kar diya hai, aapke number se jayega",
+                     V(ctx, "send_hi", "Bhej doon?", "Customer ko bhej doon?", "Abhi bhejna shuru karoon?"))
+    else:
+        body = _join(f"{fs.salutation}, {hook_en}", f"I've drafted {note_en}, to go out from your number",
+                     V(ctx, "send_en", "Shall I send it?", "Want me to send it now?", "Good to send?"))
+    return _draft(ctx, body, "binary_yes_no", hook_en, f"customer-scope '{kind}' without customer context -> merchant approval with payload facts",
+                  "customer_reminder", [], "effort externalisation + timeliness")
 
 
 FAMILIES = {
