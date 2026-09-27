@@ -27,7 +27,8 @@ AUTO_PATTERNS = [
 ]
 OPT_OUT = [r"\bstop\b", r"unsubscribe", r"don'?t (message|text|contact|send)", r"do not (message|text|contact|send)",
            r"mat bhej", r"band karo", r"remove (me|my number)", r"no more messages", r"message mat", r"leave me alone"]
-HOSTILE = [r"useless", r"\bspam", r"bother", r"fraud", r"scam", r"bakwas", r"pagal", r"shut up", r"idiot", r"stupid",
+HOSTILE = [r"useless", r"\bspam", r"bother", r"fraud", r"scam", r"bakwa+s", r"pagal", r"shut up", r"idiot", r"stupid",
+           r"faltu", r"dimaag mat", r"dimag mat", r"band kar\b", r"bekaar", r"bakwaas", r"tang mat", r"pareshan mat",
            r"nonsense", r"irritat", r"harass", r"waste of (my )?time", r"chup", r"bewakoof", r"\bf+u+c*k", r"\bdamn\b",
            r"annoying", r"get lost", r"bloody"]
 DECLINE = [r"not interested", r"no thanks", r"no,? thank", r"nahi chahiye", r"zaroorat nahi", r"interest nahi",
@@ -67,10 +68,12 @@ def classify(message: str, from_role: str, prior_texts: list[str]) -> str:
     t = (message or "").strip().lower()
     if not t:
         return "empty"
-    for prev in prior_texts[-6:]:
-        if prev and SequenceMatcher(None, prev.lower(), t).ratio() >= 0.9 and len(t) > 25:
-            return "auto_reply"
-    if _any(AUTO_PATTERNS, t):
+    engaged = _any(COMMIT, t) or "?" in t
+    repeats = sum(1 for prev in prior_texts[-6:] if prev and SequenceMatcher(None, prev.lower(), t).ratio() >= 0.9)
+    # verbatim repeats are auto-replies only if they don't read like a real (engaged) human reply, or keep coming
+    if len(t) > 25 and repeats and (not engaged or repeats >= 2):
+        return "auto_reply"
+    if _any(AUTO_PATTERNS, t) and not (_any(COMMIT, t) and not re.search(r"thank(s| you) for contacting", t)):
         return "auto_reply"
     if _any(OPT_OUT, t):
         return "opt_out"
@@ -80,12 +83,12 @@ def classify(message: str, from_role: str, prior_texts: list[str]) -> str:
         return "decline"
     if from_role == "customer" and re.match(r"^\s*(1|2|3|one|two|first|second|pehla|doosra)\b", t):
         return "slot_choice"
-    if _any(OFF_TOPIC, t):
-        return "off_topic"
     if _any(LATER, t) and not _any([r"\byes\b", r"\bhaan\b", r"go ahead", r"do it"], t):
         return "later"
-    if _any(COMMIT, t):
+    if _any(COMMIT, t):          # a "yes" wins over an off-topic aside in the same message (handled inline)
         return "commit"
+    if _any(OFF_TOPIC, t):
+        return "off_topic"
     if _any(QUESTION_WORDS, t):
         return "question"
     return "info"
@@ -209,18 +212,48 @@ class ReplyEngine:
             return self._send(conv, body, "open_ended", "Off-topic request politely declined; redirected to the open thread.")
         if role == "customer":
             return self._customer_reply(conv, klass, msg)
+        if klass in ("commit", "question", "info") and conv.meta.get("stage", 0) >= 1 and \
+                re.search(r"mistake|wrong|galat|incorrect|should be|isn'?t (it|the)|not correct|by mistake|fix (it|this|that)|typo", msg.lower()):
+            conv.meta["stage"] = min(conv.meta.get("stage", 1), 2)
+            return self._send(conv, self._t(conv,
+                "Good catch — thanks. I'll correct that before anything goes out and resend the fixed version here for a final OK.",
+                "Sahi pakda — shukriya. Bhejne se pehle isko theek karke corrected version yahin final OK ke liye bhejti hoon."),
+                "none", "Merchant flagged an error; acknowledged and holding the send until corrected.")
         if klass == "commit":
             conv.committed = True
-            body = self._artifact(conv)
-            return self._send(conv, body, "binary_confirm_cancel",
-                              "Merchant committed: switched to action mode and delivered the artifact immediately (no qualifying).",
-                              committed=True)
+            stage = conv.meta.get("stage", 0)
+            aside = self._aside(conv, msg)
+            if stage == 0:
+                conv.meta["stage"] = 1
+                art = self._artifact(conv)
+                m = re.search(r'"([^"]{20,})"', art)
+                if m:
+                    conv.meta["artifact_note"] = m.group(1)
+                return self._send(conv, aside + art, "binary_confirm_cancel",
+                                  "Merchant committed: switched to action mode and delivered the artifact immediately (no qualifying).",
+                                  committed=True)
+            if stage == 1:
+                conv.meta["stage"] = 2
+                return self._send(conv, aside + self._done(conv), "binary_yes_no",
+                                  "Merchant approved the draft: executed it and offered one concrete follow-on.", committed=True)
+            if stage == 2:
+                conv.meta["stage"] = 3
+                return self._send(conv, aside + self._second_artifact(conv), "binary_confirm_cancel",
+                                  "Merchant accepted the follow-on: delivered it immediately.", committed=True)
+            if stage == 3:
+                conv.meta["stage"] = 4
+                return self._send(conv, aside + self._wrap(conv), "none", "Both deliverables done; closing the loop with a clear summary.",
+                                  committed=True)
+            return ReplyAction("end", rationale="Work delivered and acknowledged; ending without adding noise.")
         if turn >= 6:
             body = self._t(conv, "Here's where we are: the draft is ready whenever you want it. Reply YES anytime and I'll publish it.",
                            "Summary: draft ready hai, jab chahein YES reply kar dijiye aur main publish kar doongi.")
             return self._send(conv, body, "binary_yes_no", "Long thread; wrapping up with a clear, low-effort next step.")
         if klass == "question" and conv.committed and re.search(r"what else|what next|whats next|what's next|aur kya|next kya|anything else|aage kya", msg.lower()):
+            conv.meta["stage"] = max(conv.meta.get("stage", 0), 2)
             return self._send(conv, self._followon(conv), "binary_yes_no", "Merchant engaged after delivery; offering the next concrete step.")
+        if conv.meta.get("stage", 0) >= 4:
+            return ReplyAction("end", rationale="Thread complete; acknowledging silently rather than adding noise.")
         if klass == "question":
             return self._send(conv, self._answer(conv, msg), "open_ended", "Answered from context only; re-offered the next step.")
         # info / neutral engagement -> use it
@@ -246,7 +279,10 @@ class ReplyEngine:
     def _send(self, conv: Conversation, body: str, cta: str, rationale: str, committed: bool = False) -> ReplyAction:
         prior = conv.bodies
         if any(validator._jaccard(p, body) >= 0.8 for p in prior):
-            body = body + self._t(conv, " (Just reply YES and I'll take it from here.)", " (Bas YES reply kar dijiye, baaki main dekh loongi.)")
+            alt = self._wrap(conv)
+            if any(validator._jaccard(p, alt) >= 0.8 for p in prior):
+                return ReplyAction("wait", wait_seconds=3600, rationale="Nothing new to add without repeating myself; waiting.")
+            body, cta = alt, "none"
         if committed:
             low = body.lower()
             for q in ("would you", "do you", "can you tell", "what if", "how about"):
@@ -254,40 +290,51 @@ class ReplyEngine:
         return ReplyAction("send", body=re.sub(r"[ \t]+", " ", body).strip(), cta=cta, rationale=rationale)
 
     def _auto_nudge(self, conv: Conversation) -> str:
-        what = self._offer_phrase(conv)
-        return self._t(conv, f"Looks like an auto-reply 🙂 When the owner sees this, a quick YES is all I need to {what}.",
-                       f"Lagta hai yeh auto-reply hai 🙂 Owner dekhein toh bas YES reply kar dein — main {what} kar doongi.")
+        en, hi = self._offer_noun(conv)
+        return self._t(conv, f"Looks like an auto-reply 🙂 When the owner sees this, a quick YES is all I need to send {en}.",
+                       f"Lagta hai yeh auto-reply hai 🙂 Owner dekhein toh bas YES reply kar dein — main {hi} bhej doongi.")
 
-    def _offer_phrase(self, conv: Conversation) -> str:
-        d = conv.deliverable or ""
-        if (conv.language or self._default_lang(conv)) in ("hinglish", "hindi"):
-            return {
-                "digest_summary+patient_whatsapp": "summary + patient WhatsApp draft bhej doon",
-                "compliance_checklist": "compliance checklist bhej doon",
-                "recall_customer_note": "customer note + pickup steps share kar doon",
-                "review_request": "review request bhej doon",
-                "review_replies": "review replies share kar doon",
-                "registration_details": "registration details bhej doon",
-                "renewal+refresh": "renewal process kar doon",
-                "gbp_verification": "verification mein guide kar doon",
-            }.get(d, "taiyaar draft share kar doon")
-        return {
-            "digest_summary+patient_whatsapp": "send the summary + patient WhatsApp draft",
-            "compliance_checklist": "send the compliance checklist",
-            "recall_customer_note": "share the customer note + pickup steps",
-            "review_request": "send the review request",
-            "review_replies": "share the drafted review replies",
-            "registration_details": "send the registration details",
-            "renewal+refresh": "process the renewal",
-            "gbp_verification": "walk you through verification",
-        }.get(d, "share the draft I've prepared")
+    NOUNS = {
+        "digest_summary+patient_whatsapp": ("the summary + patient WhatsApp draft", "summary + patient WhatsApp draft"),
+        "compliance_checklist": ("the compliance checklist", "compliance checklist"),
+        "recall_customer_note": ("the customer note + pickup steps", "customer note + pickup steps"),
+        "review_request": ("the review request", "review request"),
+        "review_replies": ("the drafted review replies", "review replies ka draft"),
+        "registration_details": ("the registration details", "registration details"),
+        "renewal+refresh": ("the renewal details", "renewal details"),
+        "gbp_verification": ("the verification steps", "verification steps"),
+        "seasonal_whatsapp": ("the customer WhatsApp draft", "customer WhatsApp draft"),
+        "plan_announcement": ("the announcement post", "announcement post"),
+        "match_day_creatives": ("the delivery banner + story copy", "delivery banner + story copy"),
+        "customer_reminder": ("the customer reminder", "customer reminder"),
+        "attendance_challenge": ("the challenge draft", "challenge draft"),
+    }
+
+    def _offer_noun(self, conv: Conversation) -> tuple[str, str]:
+        return self.NOUNS.get(conv.deliverable or "", ("the draft I've prepared", "taiyaar draft"))
 
     def _redirect(self, conv: Conversation) -> str:
-        return self._t(conv, f"Meanwhile, shall I {self._offer_phrase(conv)}?", f"Tab tak, {self._offer_phrase(conv)}?")
+        en, hi = self._offer_noun(conv)
+        return self._t(conv, f"Meanwhile, shall I send {en}?", f"Tab tak {hi} bhej doon?")
 
     def _next_step(self, conv: Conversation) -> str:
-        return self._t(conv, f"Next step: I'll {self._offer_phrase(conv)} — reply YES and it's done.",
-                       f"Next step: main {self._offer_phrase(conv).replace(' doon', '').replace(' kar', '')} — YES reply karein aur ho jayega.")
+        en, hi = self._offer_noun(conv)
+        return self._t(conv, f"Next step: I'll send {en} — reply YES and it's done.", f"Next step: main {hi} bhej doongi — YES reply karein aur ho jayega.")
+
+    def _aside(self, conv: Conversation, msg: str) -> str:
+        """One-line handling of an off-topic ask or a data-source question inside a 'yes' message."""
+        low = msg.lower()
+        out = ""
+        if _any(OFF_TOPIC, low) and not conv.meta.get("ca_noted"):
+            conv.meta["ca_noted"] = True
+            out += self._t(conv, "(GST/filing is best done by your CA — outside what I handle.) ", "(GST/filing ke liye aapke CA sahi rahenge — woh mere scope se bahar hai.) ")
+        if re.search(r"where.*(data|number)|source|kahan se|kaha se|how do you know", low):
+            out += self._t(conv, "(The numbers are from your Google profile insights and magicpin's category benchmark.) ",
+                           "(Numbers aapke Google profile insights aur magicpin ke category benchmark se hain.) ")
+        elif "?" in msg and not out:
+            out += self._t(conv, "(On your question — I'll confirm that detail and update the draft before it goes live.) ",
+                           "(Aapke sawaal pe — woh detail confirm karke draft live hone se pehle update kar doongi.) ")
+        return out
 
     def _followon(self, conv: Conversation) -> str:
         category, merchant, trigger, customer = self._contexts(conv)
@@ -312,8 +359,9 @@ class ReplyEngine:
             if (trigger.get("payload") or {}) and not (trigger.get("payload") or {}).get("placeholder"):
                 srcs.append(self._t(conv, "the alert on your account this week", "is hafte aapke account pe aaya alert"))
             listing = "; ".join(srcs) or self._t(conv, "your magicpin account data", "aapka magicpin account data")
-            return self._t(conv, f"From {listing}. Nothing is estimated. Shall I {self._offer_phrase(conv)}?",
-                           f"Yeh {listing} se hai — kuch bhi andaaza nahi. {self._offer_phrase(conv).capitalize()}?")
+            en, hi = self._offer_noun(conv)
+            return self._t(conv, f"From {listing}. Nothing is estimated. Shall I send {en}?",
+                           f"Yeh {listing} se hai — kuch bhi andaaza nahi. {hi.capitalize()} bhej doon?")
         if re.search(r"price|cost|kitna|charge|fee|₹|rupee|paisa|paise", low):
             offers = _active_offers(merchant) or _catalog(category)[:2]
             amt = (trigger.get("payload") or {}).get("renewal_amount")
@@ -321,8 +369,9 @@ class ReplyEngine:
                 return self._t(conv, f"The renewal is ₹{amt:,} for the plan. Shall I process it?",
                                f"Renewal ₹{amt:,} ka hai. Process kar doon?")
             if re.search(r"(cost|charge|pay).*(me|us|this)|mujhe|hume|kitna lagega|kitne ka", low):
-                return self._t(conv, f"No ad spend is needed for this — it's a post/update I draft for you to approve. Shall I {self._offer_phrase(conv)}?",
-                               f"Isme koi ad spend nahi lagta — yeh post/update main draft karti hoon, aap bas approve karein. {self._offer_phrase(conv).capitalize()}?")
+                en, hi = self._offer_noun(conv)
+                return self._t(conv, f"No ad spend is needed for this — it's a post/update I draft for you to approve. Shall I send {en}?",
+                               f"Isme koi ad spend nahi lagta — yeh post/update main draft karti hoon, aap bas approve karein. {hi.capitalize()} bhej doon?")
             if offers:
                 listing = ", ".join(f"'{o}'" for o in offers[:2])
                 return self._t(conv, f"Current pricing on your profile: {listing}. Shall I use these in the draft?",
@@ -331,8 +380,9 @@ class ReplyEngine:
         if d and re.search(r"source|study|research|trial|circular|kya hai|what is|details", low):
             return self._t(conv, f"It's from {d.get('source')}: {_first_sentence(d.get('summary'))} Shall I send the full summary?",
                            f"Yeh {d.get('source')} se hai: {_first_sentence(d.get('summary'))} Poora summary bhej doon?")
-        return self._t(conv, f"Good question — I don't want to guess, so I'll confirm and get back to you here. Meanwhile, shall I {self._offer_phrase(conv)}?",
-                       f"Achha sawaal — main guess nahi karungi, confirm karke yahin bataungi. Tab tak {self._offer_phrase(conv)} kar doon?")
+        en, hi = self._offer_noun(conv)
+        return self._t(conv, f"Good question — I don't want to guess, so I'll confirm and get back to you here. Meanwhile, shall I send {en}?",
+                       f"Achha sawaal — main guess nahi karungi, confirm karke yahin bataungi. Tab tak {hi} bhej doon?")
 
     def _curious_followup(self, conv: Conversation, msg: str) -> str:
         category, merchant, trigger, customer = self._contexts(conv)
@@ -429,6 +479,74 @@ class ReplyEngine:
         if d == "attendance_challenge":
             return self._t(conv, f"Here's the draft: \"{name} 4-Week Consistency Challenge — 12 sessions in 4 weeks, members who finish get a shout-out on our wall.\" Reply CONFIRM and I'll send it to your members.",
                            f"Draft yeh raha: \"{name} 4-Week Consistency Challenge — 4 hafte mein 12 sessions, complete karne walon ka wall pe shout-out.\" CONFIRM reply karein, members ko bhej doongi.")
+        p = trigger.get("payload") or {}
+        where = f"{name}{', ' + loc if loc else ''}"
+        if d == "seasonal_whatsapp":
+            items = [re.sub(r"_demand_[+-]\d+", "", str(x)).replace("_", " ") for x in (p.get("trends") or []) if "+" in str(x)]
+            items_s = ", ".join(items[:3]) or "seasonal essentials"
+            note = f"Summer essentials in stock at {where}: {items_s}." + (f" {offer}." if offer else "") + " Reply to order."
+            return self._t(conv, f"Here's the customer WhatsApp: \"{note}\" Reply CONFIRM and I'll send it to your regulars.",
+                           f"Customer WhatsApp yeh raha: \"{note}\" CONFIRM reply karein, regulars ko bhej doongi.")
+        if d == "plan_announcement":
+            lines = [l.lstrip("• ").strip() for l in (conv.bodies[0] if conv.bodies else "").splitlines() if l.strip().startswith("•")]
+            topic = humanize((p.get("intent_topic") or "new program"))
+            note = f"New at {where}: {topic} — " + "; ".join(lines[:3]) + ". Reply to reserve a spot."
+            return self._t(conv, f"Here's the announcement: \"{note}\" Reply CONFIRM and it goes out as a Google post + WhatsApp broadcast.",
+                           f"Announcement yeh raha: \"{note}\" CONFIRM reply karein, Google post + WhatsApp broadcast dono chale jayenge.")
+        if d == "match_day_creatives":
+            note = f"Match night at home? {offer or 'Our match-night specials'} — delivered hot from {where}. Order on Swiggy now."
+            return self._t(conv, f"Here's the banner + story copy: \"{note}\" Reply CONFIRM and I'll push it before the first ball.",
+                           f"Banner + story copy yeh raha: \"{note}\" CONFIRM reply karein, match se pehle live kar doongi.")
+        if d == "festival_package":
+            fest = p.get("festival") or "Festive"
+            note = f"{fest} at {where}: book early" + (f" — {offer}" if offer else "") + ". Limited slots, reply to reserve."
+            return self._t(conv, f"Here's the {fest} package post: \"{note}\" Reply CONFIRM and it goes live today.",
+                           f"{fest} package post yeh raha: \"{note}\" CONFIRM reply karein, aaj live kar doongi.")
+        if d == "event_update":
+            kind = humanize(str(trigger.get("kind", "update")))
+            note = f"{kind.capitalize()} update from {where}: we're open and ready to help" + (f" — {offer}" if offer else "") + "."
+            return self._t(conv, f"Here's the customer update: \"{note}\" Reply CONFIRM and I'll send it out.",
+                           f"Customer update yeh raha: \"{note}\" CONFIRM reply karein, bhej doongi.")
+        if d == "winback_campaign":
+            note = f"We miss you at {where}!" + (f" {offer} this week" if offer else " Come by this week") + " — reply to book."
+            return self._t(conv, f"Here's the win-back note: \"{note}\" Reply CONFIRM and it goes to your lapsed customers.",
+                           f"Win-back note yeh raha: \"{note}\" CONFIRM reply karein, lapsed customers ko bhej doongi.")
         post_offer = f" {offer}." if offer else ""
-        return self._t(conv, f"Here's the Google post draft: \"{name}{', ' + loc if loc else ''} —{post_offer} Message us on WhatsApp to book.\" Reply CONFIRM and it goes live today; next I'll prep the WhatsApp status version.",
-                       f"Google post draft yeh raha: \"{name}{', ' + loc if loc else ''} —{post_offer} Book karne ke liye WhatsApp karein.\" CONFIRM reply karein, aaj hi live kar doongi; next WhatsApp status version bhi ready karungi.")
+        return self._t(conv, f"Here's the Google post draft: \"{where} —{post_offer} Message us on WhatsApp to book.\" Reply CONFIRM and it goes live today; next I'll prep the WhatsApp status version.",
+                       f"Google post draft yeh raha: \"{where} —{post_offer} Book karne ke liye WhatsApp karein.\" CONFIRM reply karein, aaj hi live kar doongi; next WhatsApp status version bhi ready karungi.")
+
+    # ---------------------------------------------------------- later stages
+    def _done(self, conv: Conversation) -> str:
+        d = conv.deliverable or ""
+        done_en, done_hi = {
+            "compliance_checklist": ("Done ✅ — checklist saved and a reminder is set for a week before the deadline.",
+                                     "Done ✅ — checklist save ho gayi, deadline se ek hafte pehle reminder set hai."),
+            "recall_customer_note": ("Done ✅ — the note is queued for the affected customers.", "Done ✅ — affected customers ke liye note queue ho gaya."),
+            "renewal+refresh": ("Done ✅ — renewal is in process; your listing stays live.", "Done ✅ — renewal process mein hai; listing live rahegi."),
+            "registration_details": ("Done ✅ — it's in your calendar.", "Done ✅ — calendar mein add ho gaya."),
+            "customer_reminder": ("Done ✅ — the reminder has gone out from your number.", "Done ✅ — reminder aapke number se chala gaya."),
+        }.get(d, ("Done ✅ — it's live.", "Done ✅ — live ho gaya."))
+        nxt_en, nxt_hi = ("Next: a WhatsApp status version + a 2-line reply your staff can paste when customers ask. Want both?",
+                          "Next: ek WhatsApp status version + customers ke sawaal ke liye 2-line ready reply. Dono bhej doon?")
+        return self._t(conv, f"{done_en} {nxt_en}", f"{done_hi} {nxt_hi}")
+
+    def _second_artifact(self, conv: Conversation) -> str:
+        category, merchant, trigger, customer = self._contexts(conv)
+        ident = (merchant or {}).get("identity") or {}
+        name = ident.get("name", "our store")
+        offer = _best_offer(build_ctx(category, merchant, trigger, customer, None)) if merchant else ""
+        note = conv.meta.get("artifact_note")
+        if note:
+            first = re.split(r"(?<=[.!?])\s+", note)[0]
+            status = first if len(first) <= 140 else first[:137].rsplit(" ", 1)[0] + "…"
+            reply = f"Thanks for asking! {first} Share a time that suits you and we'll take care of it."
+        else:
+            status = f"{offer} at {name} — message us to book!" if offer else f"New this week at {name} — message us to know more!"
+            reply = f"Thanks for asking! {offer} is available right now — share a time and we'll book you in." if offer else \
+                "Thanks for asking! Share a time that suits you and we'll take care of it."
+        return self._t(conv, f"Here you go —\nStatus: \"{status}\"\nQuick reply: \"{reply}\"\nReply CONFIRM and I'll set the status live.",
+                       f"Yeh raha —\nStatus: \"{status}\"\nQuick reply: \"{reply}\"\nCONFIRM reply karein, status live kar doongi.")
+
+    def _wrap(self, conv: Conversation) -> str:
+        return self._t(conv, "All set ✅ Everything's live. I'll share how it performs next week — no action needed from you.",
+                       "Sab set ✅ Sab live hai. Agle hafte performance share karungi — aapko kuch karne ki zaroorat nahi.")

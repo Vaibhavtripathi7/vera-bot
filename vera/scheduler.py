@@ -177,7 +177,7 @@ class Scheduler:
                                      trigger_id=trg.get("id"), family=family_for(trg.get("kind", ""), trg.get("scope", "merchant")),
                                      send_as=send_as, deliverable=d.deliverable, bodies=[d.body],
                                      turns=[{"from": "bot", "msg": d.body, "turn": 1}],
-                                     meta={"kind": trg.get("kind"), "source": d.source}))
+                                     meta={"kind": trg.get("kind"), "source": d.source, "hook": str(d.template_params[1])[:200]}))
             s.save_mstate(mid)
         s.save_meta()
         return {"actions": actions}
