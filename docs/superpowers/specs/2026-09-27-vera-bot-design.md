@@ -297,13 +297,13 @@ The template renderer is unit-tested to pass the validator for every trigger in 
 ## 9. Tick decision (scheduler)
 
 For each id in `available_triggers` that the bot knows about:
-- Drop it if expired (`expires_at < now`), if its suppression_key was already sent, if the merchant opted out or had a hostile end, if the customer's consent doesn't cover it, or if merchant or category context is missing.
+- Drop only for: suppression_key already sent, merchant opted out or hostile end, consent blocked per R2, or merchant/category context missing. Expiry is NOT a drop reason (R1).
 - Score: `urgency×10 + stakes[kind] + signal_match + insight_strength×5 + freshness − thin_payload_penalty − open_conversation_penalty`.
 
 Then:
 - Keep the top 1 per merchant (customer-scope triggers count per customer) and cap at 20.
 - Apply a restraint floor: a low score with no strong insight ⇒ skip.
-- An open unanswered conversation blocks new sends unless urgency ≥ 4.
+- Open conversations only lower priority; they never block (R5, R6).
 - `conversation_id` = `conv_{merchant_short}_{kind}_{yyyymmdd}`, plus a suffix when a collision would occur.
 - The suppression_key comes from the trigger (never invented). It is marked as used when the action is emitted.
 - `template_name` / `template_params` come from the plan (e.g. `vera_research_digest_v1`, `[salutation, hook, cta]`).
@@ -458,3 +458,53 @@ These are template-first, LLM-polished and validated.
 - Exact free-tier RPM/RPD per model, read from the AI Studio dashboard, set in env.
 - Final hosting choice between Oracle and GCP, depending on which signup works.
 - Team name and metadata values.
+
+---
+
+## 18. Senior review: gaps found and binding fixes
+
+This section **overrides** earlier sections where they conflict. Each item was checked against the simulator source or the generated data.
+
+### 18.1 Critical: would cause zero or blocked output
+
+| # | Gap | Evidence | Fix |
+|---|---|---|---|
+| R1 | Dropping triggers with `expires_at < now` empties every tick | The simulator's `now` = real UTC time (2026-09); seed triggers expire 2026-04/05 | **Trust `available_triggers`**: the judge lists what is active. Use expiry only for wording ("expires today") when `0 ≤ expires_at−now ≤ 7d` |
+| R2 | Consent gate blocks 6 of 30 canonical pairs | Generated customers only have `["promotional_offers"]`; triggers are appointment/recall/refill | Map kinds to purposes: **transactional** (appointment_tomorrow, booking confirm, chronic_refill_due, trial_followup) allowed with any opt-in; **promotional/recall/winback** allowed with a matching scope OR `promotional_offers` OR `reminder_opt_in=true`. Block only on `reminder_opt_in=false` with no matching scope, or a customer opt-out. State the consent basis in the rationale |
+| R3 | Persisted state leaks between judge runs | Next run re-pushes v1 → our 409; old suppressions ⇒ silence | **Session epochs**: auto-wipe when a request arrives after ≥ 45 min of inactivity; `/teardown` wipes. SQLite is used only to survive a crash *within* a session. Our own testing on the prod URL is followed by `/teardown` |
+| R4 | Relative dates go negative or absurd when `now` doesn't match the dataset's time | "−150 days to wedding" | Prefer values from the payload (`days_until`, `days_to_wedding`, labels). Computed deltas are used only if 0 ≤ value ≤ 400; otherwise omitted |
+| R5 | Skipping triggers loses canonical pairs outright | Pairs are scored per message; the brief says "all participants must produce a message" | Never skip an eligible listed trigger. Restraint applies only to opt-out / hostile / duplicate suppression_key / missing merchant context |
+| R6 | "Top-1 per merchant" loses pairs | Dr. Meera alone has 5 triggers (T06, T09, T28, T30, trg_001) | Contract allows one action per (merchant, **conversation**). Send ≤ 2 merchant-facing actions per merchant per tick (distinct conversations, ordered by score) + all customer-facing ones; defer the rest to later ticks while still listed. Rotate insights per merchant so bodies differ |
+| R7 | FastAPI rejects bodies without `Content-Type: application/json` | The brief's curl examples omit the header for /tick and /reply | Parse the raw body with `json.loads` in every handler; never rely on content-type |
+
+### 18.2 High: scoring losses
+
+| # | Gap | Fix |
+|---|---|---|
+| R8 | The intent check fails on the substring "do you", which also matches "**do you**r" | Commit replies: validator forbids {would you, do you, can you tell, what if, how about} as substrings, and requires one of {done, sending, draft, here, confirm, proceed, next} |
+| R9 | Replies can arrive for unknown conversations or merchants (simulator scenarios use fresh ids; only 5 merchants pushed) | Policy works without a plan: builds the conversation from merchant context if present, otherwise a context-free safe reply (still passes the checks) |
+| R10 | Trigger/customer state contradictions (T03 appointment for lapsed_hard; T14 lapsed_soft for churned; T08 chronic refill at a dentist) | Trigger kind drives the message; customer `state` is never stated literally; a kind that doesn't fit the category ⇒ neutral "regular follow-up" framing, with no invented service |
+| R11 | Placeholder customer triggers have no time or slot data | Never invent times. Appointment: "your appointment tomorrow" + "Reply YES to confirm, or tell us a time that suits". Recall: offer to find a slot based on `preferred_slots` wording |
+| R12 | Salutation bugs: owner_first_name already contains "Dr." ("Dr. Sameer"); missing owner | Normalise: strip honorifics then re-add per category; fallback to "{business name} team" |
+| R13 | Language: 20 of 50 merchants list `hi` plus a southern/Marathi language; Hinglish in Chennai may read off | Merchant: `hi` ∈ languages & Hindi-belt city ⇒ Hinglish; `hi` elsewhere ⇒ English with light Hindi touches ("ji", "chalega?"); customers use `language_pref` (`hi` ⇒ Roman Hindi-heavy; `xx-en mix` ⇒ English + one native greeting: Vanakkam/Namaskaram/Namaskara/Namaskar) |
+| R14 | Similar bodies across one merchant's several triggers | Per-merchant used-insight ledger; the planner prefers unused insights; Jaccard check across the merchant thread |
+| R15 | Rationale too long or unfocused | ≤ 280 chars: signal → facts → lever → (alternatives count) → (context version used) |
+| R16 | Case-study-like wording for seed triggers | Our own phrasing; 5-gram overlap check (Section 8 #10) |
+
+### 18.3 Limits and resources: the LLM budget reality
+
+- **Burst math:** a tick can list 20 triggers, pushed seconds before `/tick`. Free Gemini is ~10–15 requests/min. One call per candidate would exceed the limit in a single tick. **So:**
+  - **The templates are the primary product**; the LLM improves them when budget allows. Template quality gets the most engineering effort: 3 variants per family × language, insight-driven.
+  - **Batch writer:** one LLM call writes messages for up to 5 triggers (JSON array). 20 triggers ⇒ 4 parallel requests ≈ 4–6 s. Variants per trigger: 2 when fewer than 6 triggers are pending, else 1.
+  - **Batch critic** (Flash-Lite): one call scores all candidates of a batch. It is skipped if under 2.5 s of deadline remains; the deterministic checklist decides alone.
+  - **Gemini 2.5 Flash has "thinking" on by default**, which is slow. Set `thinkingBudget: 0`; model ids come from config.
+- **Daily quota is shared by development and evaluation:** the eval lab's judge runs on Groq/OpenRouter where possible, and quota is tracked in `llm/pool.py` counters exposed on `/v1/healthz` (debug field).
+- **Submission timing:** the portal says evaluation may start right after submission. Submit only after all gates pass, **right after the daily quota reset** (midnight Pacific ≈ 12:30–13:30 IST), with no eval runs afterwards that day.
+- **Determinism caveat:** the LLM path depends on budget. Guarantees: temperature 0 + seed + a response cache persisted within the session; the template path is fully deterministic. Documented in the README.
+
+### 18.4 Operations
+
+- Always-free VM with 1 GB RAM: the process stays under ~200 MB; SQLite + in-memory state is fine for 255 contexts plus about 100 triggers.
+- HTTPS: Caddy + DuckDNS hostname (sslip.io as fallback); `HEAD`/`GET /` and `/v1/healthz` for uptime monitors.
+- Body size limit of 600 KB enforced; oversized ⇒ 400 `payload_too_large`.
+- Latency budget from India/EU to a US/Mumbai VM is under 300 ms; choose the Mumbai (ap-mumbai-1) region on Oracle if capacity allows.
