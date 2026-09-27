@@ -44,6 +44,7 @@ class Store:
         self.db_path = db_path if db_path is not None else config.DB_PATH
         self.started = time.time()
         self.last_metadata = 0.0
+        self.last_skips: list = []
         self._reset_memory()
         self.db = None
         if self.db_path:

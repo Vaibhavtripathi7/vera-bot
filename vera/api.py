@@ -165,6 +165,11 @@ async def teardown():
     return {"status": "wiped"}
 
 
+@app.get("/v1/debug/skips")
+async def debug_skips():
+    return {"last_tick_skips": getattr(STORE, "last_skips", [])}
+
+
 @app.get("/v1/debug/llm")
 async def debug_llm():
     return POOL.status()

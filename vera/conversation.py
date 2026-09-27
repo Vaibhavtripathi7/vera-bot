@@ -134,7 +134,10 @@ class ReplyEngine:
             conv = Conversation(conversation_id=cid, merchant_id=req.get("merchant_id"), customer_id=req.get("customer_id"))
         role = str(req.get("from_role") or ("customer" if conv.customer_id else "merchant"))
         msg = str(req.get("message") or "")
-        turn = int(req.get("turn_number") or (len(conv.turns) + 2))
+        try:
+            turn = int(req.get("turn_number") or (len(conv.turns) + 2))
+        except (TypeError, ValueError):
+            turn = len(conv.turns) + 2
         mst = s.mstate(conv.merchant_id)
         mst["unanswered"] = 0
         klass = classify(msg, role, mst.get("auto_texts", []) + [t["msg"] for t in conv.turns if t.get("from") != "bot"])

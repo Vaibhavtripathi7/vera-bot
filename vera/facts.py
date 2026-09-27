@@ -125,7 +125,8 @@ def build(category: dict, merchant: dict, trigger: dict, customer: dict | None, 
     fs = FactSheet(reader="customer" if customer else "merchant", category=cat, now=now)
     fs.noun = CATEGORY_NOUN.get(cat, ("business", "customers", "businesses"))
     ident = merchant.get("identity") or {}
-    fs.biz = ident.get("name") or "your business"
+    from .util import suspicious
+    fs.biz = ident.get("name") if ident.get("name") and not suspicious(ident.get("name")) else f"your {CATEGORY_NOUN.get(cat, ('business',))[0]}"
     fs.locality = ident.get("locality") or ""
     fs.city = ident.get("city") or ""
     fs.salutation, fs.owner = salutation_for(cat, merchant)

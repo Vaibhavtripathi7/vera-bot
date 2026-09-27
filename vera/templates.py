@@ -167,7 +167,9 @@ def _pretty_dates(text: str, fs: FactSheet) -> str:
 
 
 def _active_offers(m: dict) -> list[str]:
-    return [o["title"] for o in (m.get("offers") or []) if o.get("status") == "active" and o.get("title")]
+    from .util import instruction_like
+    return [o["title"] for o in (m.get("offers") or []) if isinstance(o, dict) and o.get("status") == "active"
+            and o.get("title") and not instruction_like(o["title"])]
 
 
 def _catalog(category: dict, types=("service_at_price", "free_service", "free_trial")) -> list[str]:

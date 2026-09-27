@@ -109,7 +109,27 @@ def canon_number(tok: str) -> str:
 HONORIFIC_RE = re.compile(r"^(dr\.?|mr\.?|mrs\.?|ms\.?|shri|smt\.?)\s+", re.I)
 
 
+SUSPICIOUS_RE = re.compile(r"ignore|instruction|system\s*:|system prompt|\bprompt\b|developer mode|jailbreak|\d+\s*%|free for life|"
+                           r"<\s*/?\s*script|\{\{|\}\}", re.I)
+
+
+INSTRUCTION_RE = re.compile(r"ignore|instruction|system\s*:|system prompt|\bprompt\b|developer mode|jailbreak|free for life|"
+                            r"<\s*/?\s*script|\{\{|\}\}", re.I)
+
+
+def suspicious(text) -> bool:
+    """Names: instruction-like text or discount-looking strings are not real names."""
+    return bool(text) and bool(SUSPICIOUS_RE.search(str(text)))
+
+
+def instruction_like(text) -> bool:
+    """Offers: only reject instruction-like text (a real offer may legitimately contain '15% OFF')."""
+    return bool(text) and bool(INSTRUCTION_RE.search(str(text)))
+
+
 def clean_first_name(raw: str | None) -> str:
+    if suspicious(raw):
+        return ""
     if not raw:
         return ""
     name = HONORIFIC_RE.sub("", raw.strip())
@@ -128,7 +148,7 @@ def humanize(token: str) -> str:
 
 def parse_person(name: str | None) -> tuple[str, str | None]:
     """'Aanya (parent: Sneha)' -> ('Aanya', 'Sneha'); '(walk-in, no profile)' -> ('', None)."""
-    if not name or name.strip().startswith("("):
+    if not name or name.strip().startswith("(") or suspicious(name):
         return "", None
     m = re.match(r"^\s*([^()]+?)\s*\(\s*parent\s*:\s*([^)]+)\)\s*$", name, re.I)
     if m:

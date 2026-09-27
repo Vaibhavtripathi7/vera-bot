@@ -23,6 +23,7 @@ STAKES = {
     "category_seasonal": 3, "research_digest": 3, "cde_opportunity": 2, "perf_spike": 2, "milestone_reached": 2,
     "dormant_with_vera": 2, "curious_ask_due": 1, "seasonal_perf_dip": 3,
 }
+NUDGE_KINDS = {"curious_ask_due", "dormant_with_vera", "scheduled_recurring", "festival_upcoming", "perf_spike", "milestone_reached"}
 TRANSACTIONAL = {"appointment_tomorrow", "chronic_refill_due", "trial_followup", "booking_confirmation"}
 CONSENT_WORDS = {  # trigger kind -> consent scope keywords that cover it
     "recall_due": ("recall",), "customer_lapsed_soft": ("winback", "promo", "recall"), "customer_lapsed_hard": ("winback", "promo"),
@@ -47,6 +48,11 @@ def consent_ok(trigger: dict, customer: dict | None) -> tuple[bool, str]:
     if opt_in and scope:
         return True, "reminder opt-in on record"
     return False, "no consent on record"
+
+
+def _near(a: str, b: str) -> bool:
+    sa, sb = set(re.findall(r"\w+", a.lower())), set(re.findall(r"\w+", b.lower()))
+    return bool(sa and sb) and len(sa & sb) / len(sa | sb) >= 0.8
 
 
 def _short(merchant_id: str) -> str:
@@ -101,8 +107,8 @@ class Scheduler:
                 score += 3
             if (trg.get("payload") or {}).get("placeholder"):
                 score -= 3
-            if mst.get("unanswered", 0) >= 3 and not customer:
-                skipped.append((tid, "3 unanswered nudges - holding off"))
+            if mst.get("unanswered", 0) >= 3 and not customer and kind in NUDGE_KINDS:
+                skipped.append((tid, "3 unanswered nudges - holding off on another low-value nudge"))
                 continue
             if via_merchant:
                 trg = {**trg, "scope": "merchant", "kind": f"{trg.get('kind')}__via_merchant", "_orig_kind": trg.get("kind")}
@@ -142,6 +148,14 @@ class Scheduler:
             used = set(mst.get("used_insights", []))
             prior = list(mst.get("bodies", []))[-6:]
             it = make_item(s, c["category"], c["merchant"], c["trigger"], c["customer"], now, used, prior)
+            if any(_near(it.template.body, b) for b in prior):
+                it2 = make_item(s, c["category"], c["merchant"], c["trigger"], c["customer"], now,
+                                used | {i.id for i in it.ctx.insights}, prior)
+                if any(_near(it2.template.body, b) for b in prior):
+                    s.suppressed.add(c["key"])
+                    skipped.append((c["trigger"].get("id"), "duplicate of a message already sent to this merchant"))
+                    continue
+                it = it2
             mst.setdefault("used_insights", []).extend(i for i in it.template.insights_used if i)
             mst.setdefault("bodies", []).append(it.template.body)
             items.append((c, it))
@@ -180,6 +194,7 @@ class Scheduler:
                                      meta={"kind": trg.get("kind"), "source": d.source, "hook": str(d.template_params[1])[:200]}))
             s.save_mstate(mid)
         s.save_meta()
+        s.last_skips = [{"trigger_id": t, "reason": r} for t, r in skipped]
         return {"actions": actions}
 
     def _conv_id(self, mid: str, trg: dict, customer: dict | None) -> str:
