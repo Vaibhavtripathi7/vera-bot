@@ -271,13 +271,30 @@ def _last_service(ctx: Ctx) -> str:
     return humanize(svcs[-1]).replace(" x", " ×") if svcs else ""
 
 
+def OQ(ctx: Ctx, offer: str) -> str:
+    """Quote an offer honestly: the merchant's own active offer as-is, a catalog offer as a suggestion."""
+    if offer in _active_offers(ctx.merchant):
+        return f"'{offer}'"
+    return f"'{offer}' jaisa ek service+price offer" if ctx.hi else f"a service+price offer like '{offer}'"
+
+
 def _action_for(ctx: Ctx, ins: Insight | None) -> tuple[str, str, str]:
-    """(english action, hinglish action, deliverable) that fixes the diagnosed issue."""
+    """(english action, hinglish action, deliverable); catalog offers are proposed, not presented as the merchant's own."""
+    en, hi, d = _action_for_raw(ctx, ins)
+    offer = _best_offer(ctx)
+    if offer and offer not in _active_offers(ctx.merchant):
+        hi = hi.replace(" ko highlight karte hain", " add karte hain").replace(" ko profile pe live karke", " profile pe live karke") \
+               .replace(" ko is hafte Google post", " ke saath is hafte Google post")
+        en = en.replace("and lead with a service+price offer like", "and add a service+price offer like")
+    return en, hi, d
+
+
+def _action_for_raw(ctx: Ctx, ins: Insight | None) -> tuple[str, str, str]:
     offer = _best_offer(ctx)
     iid = ins.id if ins else ""
     if iid == "offer_gap" and offer:
-        return (f"put '{offer}' live on your profile and announce it in a Google post",
-                f"'{offer}' ko profile pe live karke ek Google post daal dete hain", f"offer_live:{offer}")
+        return (f"put {OQ(ctx, offer)} live on your profile and announce it in a Google post",
+                f"{OQ(ctx, offer)} ko profile pe live karke ek Google post daal dete hain", f"offer_live:{offer}")
     if iid == "delivery_off":
         return ("switch on home delivery on your listing — I'll set it up so the extra searchers can order",
                 "listing pe home delivery on karte hain — main set up kar doongi taaki naye searchers order kar sakein", "delivery_setup")
@@ -291,17 +308,17 @@ def _action_for(ctx: Ctx, ins: Insight | None) -> tuple[str, str, str]:
         return ("reply to those reviews publicly and fix the root cause — I've drafted the replies",
                 "un reviews ka public reply karte hain — replies maine draft kar diye hain", "review_replies")
     if iid == "lapsed_pool":
-        return ("send a short win-back WhatsApp to them" + (f" with '{offer}'" if offer else ""),
-                "unhe ek chhota win-back WhatsApp bhejte hain" + (f" '{offer}' ke saath" if offer else ""),
+        return ("send a short win-back WhatsApp to them" + (f" with {OQ(ctx, offer)}" if offer else ""),
+                "unhe ek chhota win-back WhatsApp bhejte hain" + (f" {OQ(ctx, offer)} ke saath" if offer else ""),
                 "winback_campaign")
     if iid in ("ctr_gap", "views_gap", "calls_gap"):
-        hook = f" and lead with '{offer}'" if offer else ""
-        hhook = f" aur '{offer}' ko highlight karte hain" if offer else ""
+        hook = f" and lead with {OQ(ctx, offer)}" if offer else ""
+        hhook = f" aur {OQ(ctx, offer)} ko highlight karte hain" if offer else ""
         return (f"refresh your photos{hook} so more searchers click through",
                 f"photos refresh karte hain{hhook} taaki zyada log click karein", "profile_refresh")
     if offer:
-        return (f"push '{offer}' in a Google post + WhatsApp status this week",
-                f"'{offer}' ko is hafte Google post + WhatsApp status mein push karte hain", f"offer_push:{offer}")
+        return (f"push {OQ(ctx, offer)} in a Google post + WhatsApp status this week",
+                f"{OQ(ctx, offer)} ko is hafte Google post + WhatsApp status mein push karte hain", f"offer_push:{offer}")
     return ("run a quick profile refresh — photos, hours and one fresh post",
             "profile ka quick refresh karte hain — photos, timings aur ek fresh post", "profile_refresh")
 
@@ -575,11 +592,11 @@ def f_perf_spike(ctx: Ctx) -> Draft:
                       deliverable, [used, gap], "momentum + loss aversion + effort externalisation")
     if ctx.hi:
         body = _join(f"{fs.salutation}, " + V(ctx, "good_hi", "achhi khabar", "badhiya update", "ek positive signal") + f" — {hhook}" + (f", aur lagta hai {driver} se aa raha hai" if driver else ""),
-                     "Momentum pe ek aur push karein" + (f": '{offer}' ke saath ek follow-up post" if offer else ": ek follow-up post"),
+                     "Momentum pe ek aur push karein" + (f": {OQ(ctx, offer)} ke saath ek follow-up post" if offer else ": ek follow-up post"),
                      V(ctx, "post_hi", "Draft ready hai — daal doon?", "Post taiyaar hai — live kar doon?", "Draft bana liya hai — publish karoon?"))
     else:
         body = _join(f"{fs.salutation}, good news — {hook}" + (f", most likely from your {driver}" if driver else ""),
-                     "Worth riding the momentum" + (f" with a follow-up post featuring '{offer}'" if offer else " with a follow-up post"),
+                     "Worth riding the momentum" + (f" with a follow-up post featuring {OQ(ctx, offer)}" if offer else " with a follow-up post"),
                      ctx.pick("I've drafted it — want me to publish?", "Shall I put the follow-up post live today?"))
     return _draft(ctx, body, "binary_yes_no", hook, "performance spike; double down on the driver", "followup_post", [used],
                   "positive reinforcement + effort externalisation")
@@ -699,12 +716,12 @@ def f_festival(ctx: Ctx) -> Draft:
                                 "id": "festive_beat"})()
         if ctx.hi:
             body = _join(f"{fs.salutation}, festive season ki planning ka time hai — {season.hi}",
-                         "Early bookings pakadne ke liye" + (f" '{offer}' ke around" if offer else "") + " ek festive package abhi set kar lete hain",
+                         "Early bookings pakadne ke liye" + (f" {OQ(ctx, offer)} ke around" if offer else "") + " ek festive package abhi set kar lete hain",
                          V(ctx, "draft_hi", "Draft bhej doon?", "Package draft kar doon?", "Ek draft bana ke bhejoon?"))
         else:
             body = _join(f"{fs.salutation}, " + V(ctx, "fest_en", "the festive calendar is coming up", "festive season planning starts now",
                                                      "it's a good moment to plan for the festive rush") + f" — {season.en}",
-                         "An early festive package" + (f" built around '{offer}'" if offer else "") + " catches planners before the rush",
+                         "An early festive package" + (f" built around {OQ(ctx, offer)}" if offer else "") + " catches planners before the rush",
                          ctx.pick("Want me to draft it?", "Shall I draft the package + a Google post?"))
         return _draft(ctx, body, "binary_yes_no", season.en, "festival trigger (no date in payload) -> category seasonal beat for this month",
                       "festival_package", [season], "timeliness + early-mover advantage")
@@ -712,11 +729,11 @@ def f_festival(ctx: Ctx) -> Draft:
     hwhen = f"{fest} {date} ko hai" + (f" — {days} din baaki" if isinstance(days, int) and days > 0 else "")
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hwhen}", (f"{beat['month_range']} mein {beat['note']}" if beat else ""),
-                     f"Early bookings pakadne ke liye {fest} package" + (f" '{offer}' ke around" if offer else "") + " abhi set kar lete hain",
+                     f"Early bookings pakadne ke liye {fest} package" + (f" {OQ(ctx, offer)} ke around" if offer else "") + " abhi set kar lete hain",
                      V(ctx, "draft_hi", "Draft bhej doon?", "Package draft kar doon?", "Ek draft bana ke bhejoon?"))
     else:
         body = _join(f"{fs.salutation}, {when}", (f"For {fs.noun[2]}, {beat['month_range']} is the {beat['note']}" if beat else ""),
-                     f"Locking an early {fest} package" + (f" built around '{offer}'" if offer else "") + " now catches the planners before the rush",
+                     f"Locking an early {fest} package" + (f" built around {OQ(ctx, offer)}" if offer else "") + " now catches the planners before the rush",
                      ctx.pick("Want me to draft it?", "Shall I draft the package + a Google post?"))
     return _draft(ctx, body, "binary_yes_no", when, "festival date from trigger + category seasonal beat", "festival_package", [],
                   "timeliness + early-mover advantage")
@@ -754,11 +771,11 @@ def f_ipl(ctx: Ctx) -> Draft:
         insight = _first_sentence(dig.get("summary")).rstrip(".")
         if ctx.hi:
             body = _join(f"{fs.salutation}, aaj {head}", f"Ek zaroori baat: {insight} ({dig.get('source')})",
-                         "Isliye aaj dine-in promo skip karein" + (f" aur '{offer}' ko delivery special ki tarah push karein" if offer else " aur delivery push karein"),
+                         "Isliye aaj dine-in promo skip karein" + (f" aur {OQ(ctx, offer)} ko delivery special ki tarah push karein" if offer else " aur delivery push karein"),
                          "Swiggy banner + Insta story draft kar doon?")
         else:
             body = _join(f"{fs.salutation}, {head} today", f"Worth knowing: {insight} ({dig.get('source')})",
-                         "So I'd skip a dine-in match promo tonight" + (f" and push '{offer}' as a delivery-first special" if offer else " and lean on delivery"),
+                         "So I'd skip a dine-in match promo tonight" + (f" and push {OQ(ctx, offer)} as a delivery-first special" if offer else " and lean on delivery"),
                          ctx.pick("Want me to draft the delivery banner + an Insta story?", "Shall I prep the delivery banner and story now?"))
         why = "Saturday match + digest says weekend matches cut covers; contrarian delivery advice"
     else:
@@ -818,10 +835,10 @@ def f_trend(ctx: Ctx) -> Draft:
         return f_generic(ctx)
     offer = _best_offer(ctx)
     if ctx.hi:
-        body = _join(f"{fs.salutation}, {tr.hi}", f"Isko pakadne ke liye {fs.locality or 'aapke area'} ke searchers ke liye ek post" + (f" '{offer}' ke saath" if offer else ""),
+        body = _join(f"{fs.salutation}, {tr.hi}", f"Isko pakadne ke liye {fs.locality or 'aapke area'} ke searchers ke liye ek post" + (f" {OQ(ctx, offer)} ke saath" if offer else ""),
                      V(ctx, "draft2_hi", "Draft kar doon?", "Post bana doon?", "Ek post draft karoon?"))
     else:
-        body = _join(f"{fs.salutation}, {tr.en}", f"A post aimed at searchers in {fs.locality or 'your area'}" + (f" featuring '{offer}'" if offer else "") + " would catch that demand",
+        body = _join(f"{fs.salutation}, {tr.en}", f"A post aimed at searchers in {fs.locality or 'your area'}" + (f" featuring {OQ(ctx, offer)}" if offer else "") + " would catch that demand",
                      ctx.pick("Want me to draft it?", "Shall I prepare the post?"))
     return _draft(ctx, body, "binary_yes_no", tr.en, "category trend signal", "trend_post", [tr], "curiosity + demand proof")
 
@@ -890,11 +907,11 @@ def f_event(ctx: Ctx) -> Draft:
     offer = _best_offer(ctx)
     if ctx.hi:
         body = _join(f"{fs.salutation}, " + V(ctx, "hu_hi", "heads-up", "dhyan dijiye", "ek zaroori update") + f" — {kind}: {head}", implication,
-                     (f"Main '{offer}' ke saath iske hisaab se ek quick update" if offer else "Main iske hisaab se ek quick update") + " customers ke liye draft kar sakti hoon",
+                     (f"Main {OQ(ctx, offer)} ke saath iske hisaab se ek quick update" if offer else "Main iske hisaab se ek quick update") + " customers ke liye draft kar sakti hoon",
                      V(ctx, "send_hi", "Bhej doon?", "Customers ko bhej doon?", "Shuru karoon?"))
     else:
         body = _join(f"{fs.salutation}, " + V(ctx, "hu_en", "heads-up", "quick flag", "worth knowing") + f" — {kind}: {head}", implication,
-                     "I can draft a quick customer update around this" + (f", leading with '{offer}'" if offer else ""),
+                     "I can draft a quick customer update around this" + (f", leading with {OQ(ctx, offer)}" if offer else ""),
                      ctx.pick("Want me to prepare it?", "Shall I draft it now?"))
     return _draft(ctx, body, "binary_yes_no", f"{kind}: {head}", f"unseen trigger '{ctx.trigger.get('kind')}' rendered from its own payload" +
                   (f" + related category item '{rel.get('id')}'" if rel else ""), "event_update", [], "timeliness + effort externalisation")
@@ -968,12 +985,12 @@ def f_winback(ctx: Ctx) -> Draft:
     if ctx.hi:
         body = _join(f"{fs.salutation}, plan band hue {since} din ho gaye" if since else f"{fs.salutation}, aapka plan abhi paused hai",
                      ("Tab se " + " aur ".join(parts_hi)) if parts_hi else "",
-                     "Main 10 minute mein profile wapas live karke" + (f" '{offer}' ke saath" if offer else "") + " un customers ko win-back message bhej sakti hoon",
+                     "Main 10 minute mein profile wapas live karke" + (f" {OQ(ctx, offer)} ke saath" if offer else "") + " un customers ko win-back message bhej sakti hoon",
                      "Restart karein? Reply YES.")
     else:
         body = _join(f"{fs.salutation}, it's been {since} days since your plan paused" if since else f"{fs.salutation}, your plan is currently paused",
                      ("Since then, " + " and ".join(parts_en)) if parts_en else "",
-                     "I can bring the profile back live" + (f" with '{offer}'" if offer else "") + " and send those customers a win-back note — about 10 minutes of setup",
+                     "I can bring the profile back live" + (f" with {OQ(ctx, offer)}" if offer else "") + " and send those customers a win-back note — about 10 minutes of setup",
                      "Want to restart? Reply YES.")
     return _draft(ctx, body, "binary_yes_no", f"{since} days since expiry", "winback: quantified loss since expiry", "reactivation+winback",
                   [], "loss aversion + effort externalisation")

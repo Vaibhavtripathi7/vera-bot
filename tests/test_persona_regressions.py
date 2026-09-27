@@ -76,3 +76,10 @@ def test_followon_uses_artifact_not_unrelated_offer(client):
     say(client, a, "CONFIRM", 3)
     r = say(client, a, "haan dono bhej do", 4)
     assert "kids yoga" in r["body"].lower() and "First Month" not in r["body"]
+
+
+def test_competitor_offer_quoted_as_is_and_catalog_offer_framed_as_suggestion(client):
+    a = start(client, "trg_023_competitor_opened_dentist")
+    assert "'Dental Cleaning @ ₹199' ke saath" in a["body"] or "leading with 'Dental Cleaning @ ₹199'" in a["body"]
+    b = start(client, "trg_025_dormancy_glamour")          # Glamour has no active offers -> catalog offer must read as a suggestion
+    assert "jaisa ek service+price offer" in b["body"] or "service+price offer like" in b["body"]
