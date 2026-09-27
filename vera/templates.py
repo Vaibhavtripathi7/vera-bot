@@ -250,7 +250,10 @@ def _action_for(ctx: Ctx, ins: Insight | None) -> tuple[str, str, str]:
     if iid == "offer_gap" and offer:
         return (f"put '{offer}' live on your profile and announce it in a Google post",
                 f"'{offer}' ko profile pe live karke ek Google post daal dete hain", f"offer_live:{offer}")
-    if iid == "stale_posts":
+    if iid == "delivery_off":
+        return ("switch on home delivery on your listing — I'll set it up so the extra searchers can order",
+                "listing pe home delivery on karte hain — main set up kar doongi taaki naye searchers order kar sakein", "delivery_setup")
+    if iid in ("stale_posts", "no_recent_post"):
         return ("publish 2 fresh Google posts this week — I've drafted them already",
                 "is hafte 2 fresh Google posts daal dete hain — draft ready hain", "gbp_posts")
     if iid == "unverified":
@@ -426,7 +429,14 @@ def f_perf_dip(ctx: Ctx) -> Draft:
             hook_id = dip.id
         else:
             gap = next((i for i in ctx.insights if i.id.endswith("_gap") and "perf" in i.tags), None)
-            hook_en, hook_hi = (gap.en, gap.hi) if gap else ("your profile activity dipped this week", "is hafte profile activity thodi giri hai")
+            views, calls = fs.get("perf.views"), fs.get("perf.calls")
+            if gap:
+                hook_en, hook_hi = gap.en, gap.hi
+            elif views and calls:
+                hook_en = f"your profile activity dipped this week — {views} and only {calls} in the last 30 days"
+                hook_hi = f"is hafte profile activity giri hai — 30 din mein {views} par sirf {calls}"
+            else:
+                hook_en, hook_hi = "your profile activity dipped this week", "is hafte profile activity thodi giri hai"
             hook_id = gap.id if gap else "-"
         cause = ctx.insight(prefer=("visibility", "offer", "reviews"),
                             exclude=("wow_", "ctr_lead", "calls_lead", "views_lead", "cohort_", "seasonal_now", "trend", hook_id))
@@ -490,6 +500,17 @@ def f_perf_spike(ctx: Ctx) -> Draft:
         else:
             hook, hhook, used = "your profile saw a spike in activity this week", "is hafte aapke profile pe activity mein spike aaya hai", None
     offer = _best_offer(ctx)
+    gap = next((i for i in ctx.insights if i.id in ("delivery_off", "unverified", "offer_gap", "stale_posts", "no_recent_post")), None)
+    if gap and not driver:
+        a_en, a_hi, deliverable = _action_for(ctx, gap)
+        if ctx.hi:
+            body = _join(f"{fs.salutation}, achhi khabar — {hhook}", f"Par ek gap hai: {gap.hi}, toh extra traffic convert nahi ho payega",
+                         f"Abhi sahi time hai: {a_hi}", "Kar doon?")
+        else:
+            body = _join(f"{fs.salutation}, good news — {hook}", f"One gap will leak that traffic though: {gap.en}",
+                         f"Best time to fix it is now: {a_en}", ctx.pick("Shall I go ahead?", "Want me to do it today?"))
+        return _draft(ctx, body, "binary_yes_no", hook, "spike + merchant-state gap: convert the momentum by fixing the visible gap",
+                      deliverable, [used, gap], "momentum + loss aversion + effort externalisation")
     if ctx.hi:
         body = _join(f"{fs.salutation}, achhi khabar — {hhook}" + (f", aur lagta hai {driver} se aa raha hai" if driver else ""),
                      "Momentum pe ek aur push karein" + (f": '{offer}' ke saath ek follow-up post" if offer else ": ek follow-up post"),
@@ -1138,7 +1159,7 @@ def f_c_lapsed(ctx: Ctx) -> Draft:
         since, hsince = f"it's been about {weeks} weeks", f"lagbhag {weeks} hafte ho gaye"
     elif last:
         months = months if months and months not in ("0", "1") else None
-        since = f"your last visit was on {last}" + (f", about {months} months ago" if months else "") + (f" (visit #{visits})" if visits and visits not in ("0", "1") else "")
+        since = f"as per our records, your last visit was on {last}" + (f", about {months} months ago" if months else "") + (f" (visit #{visits})" if visits and visits not in ("0", "1") else "")
         hsince = f"aapki last visit {last} ko thi" + (f" — lagbhag {months} mahine" if months else "")
     else:
         since, hsince = "it's been a while since your last visit", "kaafi time ho gaya aapse mile"

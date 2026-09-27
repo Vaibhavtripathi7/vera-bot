@@ -380,6 +380,28 @@ def diagnose(fs: FactSheet, category: dict, merchant: dict, now: datetime | None
                                f"aapka '{o['title']}' offer {fmt_date(o['ended'])} ko khatam ho gaya",
                                ("offer",)))
             break
+    have = {i.id for i in out}
+    for sig in merchant.get("signals") or []:      # visible to the judge: turn actionable ones into insights
+        sig = str(sig)
+        if sig == "delivery_not_set_up":
+            out.append(Insight("delivery_off", 0.78, "home delivery isn't set up on your listing yet",
+                               "aapki listing pe abhi home delivery set up nahi hai", ("offer", "visibility", "gap")))
+        elif sig == "no_recent_post" and "stale_posts" not in have:
+            out.append(Insight("no_recent_post", 0.7, "there's no recent Google post on your profile",
+                               "aapke profile pe koi recent Google post nahi hai", ("visibility", "content", "gap")))
+        elif sig == "trial_ending_soon":
+            out.append(Insight("trial_ending", 0.62, "your trial plan is ending soon", "aapka trial plan jaldi khatam ho raha hai",
+                               ("subscription",)))
+        elif sig == "unverified_gbp" and (merchant.get("identity") or {}).get("verified") is not False:
+            out.append(Insight("unverified", 0.7, "your Google profile is still unverified",
+                               "aapka Google profile abhi tak verified nahi hai", ("visibility", "gbp", "gap")))
+        elif sig == "no_active_offers" and "offer_gap" not in have:
+            pass                                   # offer_gap already derives this from the offers list
+        m2 = re.match(r"renewal_due_soon:(\d+)d", sig)
+        if m2 and "sub_ending" not in have:
+            fs.allow_number(m2.group(1))
+            out.append(Insight("sub_ending", 0.6, f"your plan renews in {m2.group(1)} days", f"aapka plan {m2.group(1)} din mein renew hona hai",
+                               ("subscription",)))
     for sig in merchant.get("signals") or []:
         m = re.match(r"stale_posts:(\d+)d", str(sig))
         if m:
@@ -432,7 +454,7 @@ def diagnose(fs: FactSheet, category: dict, merchant: dict, now: datetime | None
             fs.allow_text(q)
             out.append(Insight("trend", 0.5, f"'{q}' searches are up {fmt_pct(d)} YoY",
                                f"'{q}' searches {fmt_pct(d)} YoY badhi hain", ("trend", "demand")))
-    VISIBLE = {"ctr_gap": 0.15, "ctr_lead": 0.15, "calls_gap": 0.15, "views_gap": 0.15, "calls_lead": 0.15, "views_lead": 0.15,
+    VISIBLE = {"delivery_off": 0.2, "no_recent_post": 0.2, "trial_ending": 0.1, "ctr_gap": 0.15, "ctr_lead": 0.15, "calls_gap": 0.15, "views_gap": 0.15, "calls_lead": 0.15, "views_lead": 0.15,
                "offer_gap": 0.2, "stale_posts": 0.2, "unverified": 0.2, "sub_ending": 0.1, "sub_expired": 0.1}
     for ins in out:          # insight clauses are computed from registered facts -> quotable
         fs.allow_text(ins.en)
