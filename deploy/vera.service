@@ -1,0 +1,16 @@
+[Unit]
+Description=Vera bot (magicpin AI challenge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vera
+WorkingDirectory=/opt/vera
+EnvironmentFile=/etc/vera.env
+ExecStart=/opt/vera/.venv/bin/uvicorn vera.api:app --host 127.0.0.1 --port 8080 --workers 1 --timeout-keep-alive 30 --log-level info
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

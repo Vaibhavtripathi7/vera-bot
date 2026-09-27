@@ -1,0 +1,8 @@
+__DOMAIN__ {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080 {
+		transport http {
+			read_timeout 40s
+		}
+	}
+}
