@@ -6,7 +6,21 @@
 2. **Check your real free-tier limits:** open https://aistudio.google.com/rate-limit. Write down the RPM and RPD for `gemini-2.5-flash` and `gemini-2.5-flash-lite`.
 3. **Groq (optional fallback):** at https://console.groq.com/keys, create a key.
 
-## 2. VM (Oracle Cloud Always Free, or GCP e2-micro)
+## 2A. Hosting without a credit card: Render free web service (recommended)
+
+1. **Push the code:** the private GitHub repo is created and pushed for you (`Vaibhavtripathi7/vera-bot`).
+2. **Create the service:**
+   - Go to https://dashboard.render.com, sign up with GitHub (no card needed), then **New → Blueprint** and pick `vera-bot`. It reads `render.yaml`: free plan, Singapore region.
+   - When prompted, fill the secrets: `GEMINI_API_KEY` and `CONTACT_EMAIL`. Deploy.
+   - Your URL will look like `https://vera-bot-xxxx.onrender.com`.
+3. **Keep it awake.** Free services sleep after 15 minutes idle, so set up two free pingers:
+   - https://uptimerobot.com: HTTP(s) monitor on `https://<url>/v1/healthz`, every 5 minutes.
+   - https://cron-job.org: GET the same URL every 5 minutes (a second, independent pinger).
+
+   Health checks don't count as judge activity, so the between-runs state reset still works.
+4. **Budget:** 750 free hours/month covers one service running 24/7. Don't create a second service on this account.
+
+## 2B. VM (Oracle Cloud Always Free / GCP e2-micro), needs a card
 
 - **Oracle:**
   - Create an instance with Ubuntu 24.04, shape `VM.Standard.E2.1.Micro`, or A1 Flex if available. Use the Mumbai region if you can.

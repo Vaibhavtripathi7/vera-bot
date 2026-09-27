@@ -66,7 +66,7 @@ async def root():
 @app.get("/v1/healthz")
 @app.head("/v1/healthz")
 async def healthz():
-    STORE.touch()
+    # no STORE.touch(): uptime pingers must not count as judge activity (they would block the idle reset)
     return {"status": "ok", "uptime_seconds": STORE.uptime(), "contexts_loaded": STORE.counts()}
 
 

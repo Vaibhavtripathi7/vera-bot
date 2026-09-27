@@ -331,12 +331,12 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
                 if d:
                     return d
             except Exception:  # noqa: BLE001
-                await asyncio.sleep(4 * (attempt + 1))
+                await asyncio.sleep(12 * (attempt + 1))
         return None
 
     async def main():
         async with httpx.AsyncClient() as client:
-            sem = asyncio.Semaphore(4)
+            sem = asyncio.Semaphore(2)
 
             async def guarded(c):
                 async with sem:
