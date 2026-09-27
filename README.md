@@ -1,68 +1,51 @@
-# Vera, rebuilt: a grounded merchant-engagement bot
+# Vera bot: magicpin AI Challenge
 
-**magicpin AI Challenge submission** · Vaibhav Tripathi · `uvicorn vera.api:app`
+Vaibhav Tripathi | Live at https://vera-bot-pxq6.onrender.com | Run locally with `uvicorn vera.api:app`
 
 ## Approach
 
-The deterministic layer makes every decision and checks every fact. The LLM is only used to write the prose, and anything it writes is rejected if it adds a fact.
+I split the bot into two parts. Code makes every decision and checks every fact. A language model is only allowed to polish wording, and its output is thrown away if it adds anything new.
 
-```
-context push ─► FactSheet (typed, provenance-tagged facts; all arithmetic in code)
-            ─► Insight engine (merchant vs peer benchmarks, deltas, lapsed pools, offer gaps,
-               review themes, seasonal beats, trends, digest ↔ cohort matches → ranked "so-whats")
-/tick ──────► Scheduler (urgency × stakes × merchant-state fit; consent; suppression; ≤2 merchant-facing/merchant/tick)
-            ─► Per-trigger playbook (28 families, English + Hinglish, 2 phrasings each):
-               why-now hook with a hard fact → judgement → what Vera will do → ONE CTA last
-            ─► Batched LLM rewrite (≤5 messages per call) ─► Validator gate ─► Critic (rubric) ─► pick
-/reply ─────► Classifier (auto-reply / commit / question / later / decline / hostile / opt-out / off-topic / slot)
-            ─► State machine → send the real deliverable on "yes" (post draft, checklist, patient note, booking)
-```
+When a trigger arrives, the bot works through five steps:
 
-## What makes it robust
+1. **Collect the facts.** It turns the merchant, category, trigger and customer data into a list of facts, with every calculation done in code (for example, "CTR 1.8% against a 3.0% average for metro solo clinics").
+2. **Find what matters.** It compares the merchant with category peers and looks at offer gaps, review themes, lapsed customers, seasonal patterns and the merchant's own signals. The result is a ranked list of observations.
+3. **Pick what to send.** At each tick it ranks triggers by urgency, business stakes and fit with the merchant's current state. It respects consent and never sends the same suppression key twice.
+4. **Write the message.** Each trigger type has its own playbook, in English or Hindi-English depending on the merchant. Every message follows the same shape: why now, one hard fact, what it means for the merchant, what Vera will do, and a single question at the end.
+5. **Check it.** Before anything goes out, a validator confirms that every number and name exists in the input data, and that there are no URLs, banned words, internal jargon or extra calls to action.
 
-- **No invented facts, enforced by code.** Every number and proper noun in a message must come from the four contexts. The validator extracts them, normalises them (0.021 ↔ 2.1%, 2,100 ↔ 2100) and rejects any candidate containing an unknown one. The template draft is always valid, so the bot never goes silent.
-- **Specific even when the trigger payload is empty.** 75 of the 100 dataset triggers carry `{"placeholder": true}`. For those, the insight engine builds a specific message from the merchant's own numbers against category peers ("CTR 1.8% vs 3.0% avg for metro solo clinics"), their offer gaps and their review themes.
-- **Adapts to data injected mid-test.**
-  - Cached drafts are keyed on context versions, so pushed updates are used immediately.
-  - Trigger kinds it has never seen are written from their own payload plus the matching category knowledge, e.g. heatwave → the "summer demand" digest item.
-  - New digest items are cited with their source.
-- **Replay-ready replies.**
-  - Auto-replies are tracked per merchant, across conversation IDs: nudge once → wait → end.
-  - "Let's do it" switches straight to delivering (never another qualifying question).
-  - Abuse gets one apology plus a STOP option; STOP ends the conversation; GST-type questions are declined politely and steered back.
-  - A customer's STOP only silences that customer, never the merchant.
-- **Operational.**
-  - Raw-body JSON parsing, so a missing Content-Type header is fine.
-  - Idempotent versioned contexts (same or older version → 409).
-  - `/tick` is deadline-bounded at 7.5 s; LLM calls use batches, token buckets per provider, circuit breakers and a template fallback.
-  - State is written through to SQLite and auto-wiped between judge runs.
+Replies follow a simple conversation flow. When the merchant says yes, the bot sends the actual work (a post draft, a checklist, a customer message) instead of asking another question. It then confirms, offers one follow-up and closes. It also handles WhatsApp auto-replies, "call me later", abuse, off-topic requests, opt-outs and a merchant changing a price.
 
-## Measured results (local replica of the official judge prompt)
+## Tradeoffs
 
-- **30 canonical pairs:** 43.4/50 average. Specificity 8.7, category fit 9.0, merchant fit 8.9, decision quality 8.6, engagement 8.2.
-- **60-minute lifecycle replica** (113 messages, including never-seen triggers, digest items and customers injected mid-run): 42.5/50 average, 0 operational penalties, tick p99 under 3.5s on the deployed free instance.
-- **Official `judge_simulator.py`:** warmup, auto-reply, intent and hostile scenarios all pass.
-- **Hardening from testing against LLM-played merchants:** customer STOP never silences the merchant; conversations move through stages (draft → done → follow-on → wrap-up) instead of looping; the bot writes Roman script only.
+**Templates over free-form generation.** The free Gemini tier allows only a few requests per minute, and one tick can hold 20 triggers. Relying on the model for every message would mean timeouts or made-up numbers. So the templates do the real work, and the model (Gemini Flash-Lite, with Flash as backup) only rewrites trigger types it has never seen, where template wording is weakest. If the model is slow, rate limited or produces anything invalid, the template version goes out.
 
-## Model choice and tradeoffs
+**Deterministic by default.** The same input always gives the same message on the template path. Model output is cached within a session, so it only varies for new trigger types.
 
-- **Writer:** Gemini 3.5 Flash (with 3.8 Flash pooled in), thinking minimal for latency. **Critic:** Gemini 3.5 Flash-Lite. **Fallback writer:** Groq Llama-3.3-70B. All run at temperature 0 with a fixed seed, and responses are cached by prompt hash.
-- **Free-tier limits** (about 10–15 requests/min) would be blown by one LLM call per message when a tick holds 20 triggers. So the templates are the main product, and the LLM rewrites them in batches when budget allows. The tradeoff is some phrasing variety in exchange for guaranteed grounding and zero timeouts.
-- **Determinism:** the template path is fully deterministic. The LLM path is deterministic within a session through the cache, but depends on the available quota.
+**Honest over clever.** When the data doesn't answer a merchant's question, the bot says it will confirm rather than guessing.
 
-## What additional context would help most
+## Results
 
-- The merchant's real appointment calendar and open slots.
-- Per-merchant reply-time patterns, to pick send windows.
-- The WhatsApp template registry.
-- Explicit "last N Vera messages" with engagement outcomes, to learn which persuasion levers work for each merchant.
+Scores come from a local copy of the official judge prompt.
 
-## Run / test
+- 30 canonical test pairs: 43.4 out of 50 on average.
+- Official judge simulator against the live URL: all four scenarios pass, and the scored messages average 44 out of 50.
+- A 60-minute simulated test with 113 messages and mid-run injected data: 0 operational penalties, slowest tick under 6 seconds.
+- An adversarial test suite of about 1,600 checks (malformed requests, 13 kinds of corrupted input data, hostile model output, prompt injection, restarts, load) passes with 0 failures, both locally and against the live URL.
+
+## What extra context would help most
+
+- The merchant's real appointment calendar, so the bot can offer actual free slots.
+- When each merchant usually replies, so messages arrive at the right time.
+- The approved WhatsApp template list.
+- A history of which past messages each merchant replied to, so the bot can learn what works for them.
+
+## Running and testing
 
 ```bash
-uv sync && uv run uvicorn vera.api:app --port 8080     # bot
-uv run pytest -q                                        # 13 contract + pipeline tests
-uv run python -m eval.render_all --pairs --show         # the 30 canonical messages
-uv run python -m eval.harness [--judge gemini]          # 60-min lifecycle replica + unseen injections
-uv run python bot.py                                    # submission.jsonl
+uv sync
+uv run uvicorn vera.api:app --port 8080        # start the bot
+uv run pytest -q                                # unit tests and the adversarial suite
+uv run python -m eval.harness                   # 60-minute simulated judge run
+uv run python bot.py                            # writes submission.jsonl
 ```
