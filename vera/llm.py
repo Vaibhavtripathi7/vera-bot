@@ -154,13 +154,18 @@ class Pool:
             return self.cache[key]
         provs = self.writers if role == "writer" else self.critics
         timeout = timeout or config.LLM_TIMEOUT
+        deadline = time.monotonic() + timeout
         for p in provs:
+            left = deadline - time.monotonic()
+            if left < 1.5:                    # not enough time for another attempt
+                break
+            per_try = min(4.5, left - 0.3)
             if not p.healthy or not p.bucket.available():
                 continue
             p.bucket.take()
             self.stats["calls"] += 1
             try:
-                text = await asyncio.wait_for(p.call(self.client(), system, prompt, timeout, max_tokens), timeout + 0.5)
+                text = await asyncio.wait_for(p.call(self.client(), system, prompt, per_try, max_tokens), per_try + 0.2)
                 data = parse_json(text)
                 if data is None:
                     raise ValueError("unparseable json")
@@ -180,6 +185,8 @@ class Pool:
                 p.last_error = f"{status or type(e).__name__}: {detail}"
                 if status in (429, 503):          # quota / overload: stop hammering this model for a while
                     p.open_until = time.time() + (60 if status == 429 else 20)
+                elif isinstance(e, (asyncio.TimeoutError, httpx.TimeoutException)):
+                    p.open_until = time.time() + 120  # slow right now: don't let it eat the next tick's budget
                 self.stats["fail"] += 1
                 log.warning("llm %s failed: %s", p.name, type(e).__name__)
         return None

@@ -26,7 +26,7 @@ SUBMITTED_AT = _env("SUBMITTED_AT", "2026-09-27T00:00:00Z")
 # LLM (all optional - bot is fully functional on templates alone)
 LLM_ENABLED = _env("LLM_ENABLED", "1") == "1"
 GEMINI_API_KEY = _env("GEMINI_API_KEY")
-GEMINI_WRITER_MODELS = [m.strip() for m in _env("GEMINI_WRITER_MODELS", "gemini-3.5-flash,gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite").split(",") if m.strip()]
+GEMINI_WRITER_MODELS = [m.strip() for m in _env("GEMINI_WRITER_MODELS", "gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.5-flash,gemini-3.8-flash").split(",") if m.strip()]
 GEMINI_CRITIC_MODELS = [m.strip() for m in _env("GEMINI_CRITIC_MODELS", "gemini-flash-lite-latest,gemini-3.5-flash-lite").split(",") if m.strip()]
 # Per-model free-tier limits "model:rpm:rpd,..." (AI Studio dashboard, with ~10-20% headroom). Unlisted models use the
 # role defaults below. Flash models: 5 RPM / 20 RPD; Flash-Lite: 15 RPM / 500 RPD (Sep 2026 free tier).
