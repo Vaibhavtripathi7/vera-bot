@@ -47,6 +47,7 @@ class Provider:
         self.name, self.model, self.key = name, model, key
         self.bucket = Bucket(rpm, rpd)
         self.failures, self.open_until = 0, 0.0
+        self.last_error = ""
 
     @property
     def healthy(self) -> bool:
@@ -169,7 +170,14 @@ class Pool:
                 return data
             except Exception as e:  # noqa: BLE001 - any provider error just falls through
                 p.record(False)
-                status = getattr(getattr(e, "response", None), "status_code", None)
+                resp = getattr(e, "response", None)
+                status = getattr(resp, "status_code", None)
+                detail = ""
+                try:
+                    detail = (resp.json().get("error") or {}).get("message", "")[:160] if resp is not None else str(e)[:160]
+                except Exception:  # noqa: BLE001
+                    detail = str(e)[:160]
+                p.last_error = f"{status or type(e).__name__}: {detail}"
                 if status in (429, 503):          # quota / overload: stop hammering this model for a while
                     p.open_until = time.time() + (60 if status == 429 else 20)
                 self.stats["fail"] += 1
@@ -178,7 +186,9 @@ class Pool:
 
     def status(self) -> dict:
         return {"enabled": self.enabled, **self.stats,
-                "providers": {p.name: {**p.bucket.status(), "healthy": p.healthy} for p in {*self.writers, *self.critics}}}
+                "key_present": bool(config.GEMINI_API_KEY), "key_len": len(config.GEMINI_API_KEY),
+                "providers": {p.name: {**p.bucket.status(), "healthy": p.healthy, "last_error": p.last_error}
+                              for p in {*self.writers, *self.critics}}}
 
 
 def parse_json(text: str) -> dict | None:
