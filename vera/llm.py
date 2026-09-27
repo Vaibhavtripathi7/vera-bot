@@ -165,6 +165,9 @@ class Pool:
                 return data
             except Exception as e:  # noqa: BLE001 - any provider error just falls through
                 p.record(False)
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status in (429, 503):          # quota / overload: stop hammering this model for a while
+                    p.open_until = time.time() + (60 if status == 429 else 20)
                 self.stats["fail"] += 1
                 log.warning("llm %s failed: %s", p.name, type(e).__name__)
         return None
