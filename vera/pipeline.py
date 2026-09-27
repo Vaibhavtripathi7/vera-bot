@@ -32,7 +32,8 @@ Hard rules:
 - Keep every number and the offer/price exactly as written. Same or shorter length. ONE ask, as the last sentence, keeping
   the baseline's ask type (e.g. "Reply YES", a single short question). No extra questions.
 - Respect LANGUAGE exactly (Hinglish = natural Roman-script Hindi-English code-mix; do not switch to full English clauses).
-- Write ONLY in Latin/Roman letters. Never use Devanagari, Urdu/Arabic or any other script (write "agle", not "اگلے" or "अगले").
+- Use ONLY the English alphabet (a-z, A-Z) for every word, including Hindi words: write them the way people type Hinglish on
+  WhatsApp, e.g. "agle 3 din", "dukaan", "garmi", "kar doon". Symbols allowed: digits, ₹, °, %, —, punctuation.
 - No URLs, hype, preamble, emojis beyond the baseline's, internal jargon or snake_case.
 Return JSON: {"items":[{"id":"<id>","bodies":["<variant 1>", "<variant 2 if requested>"]}]}"""
 
