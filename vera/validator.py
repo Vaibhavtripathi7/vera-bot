@@ -103,7 +103,7 @@ def validate(body: str, fs: FactSheet, *, category: dict | None = None, prior_bo
     # CTA shape: proactive messages end on the ask
     if kind == "proactive":
         last = re.split(r"(?<=[.!?])\s+", body.strip())[-1]
-        if "?" not in last and not re.search(r"\breply\b|\bbatayein\b|\bbataiye\b|\bconfirm\b", last.lower()):
+        if "?" not in last and not re.search(r"\breply\b|\bbatayein\b|\bbataiye\b|\bconfirm\b|\byes\b|likhiye|bhejiye", last.lower()):
             v.append("cta_not_last")
         if body.count("?") > 2:
             v.append("multiple_ctas")

@@ -88,7 +88,7 @@ def check_message(body: str, blobs: list, category: dict | None, *, derived_ok: 
     if q > 2:
         f.append(f"questions:{q}")
     last = re.split(r"(?<=[.!?])\s+|\n", body.strip())[-1].lower()
-    if "?" not in last and not re.search(r"reply|confirm|batayein|bataiye|karein|tell us|share", last):
+    if "?" not in last and not re.search(r"reply|confirm|batayein|bataiye|karein|tell us|share|\byes\b|likhiye|bhejiye", last):
         f.append("cta_not_last")
     return f
 

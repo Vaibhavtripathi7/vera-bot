@@ -8,6 +8,10 @@ from vera import api
 from vera.llm import Gemini, parse_json
 
 PERSONAS = [
+    "a confused owner who first asks 'aap kaun ho? ye kya hai?' and then cautiously agrees",
+    "an owner who haggles: asks if you can do it cheaper or free, then agrees",
+    "an owner who replies with one-word answers only (ok / hmm / haan / kya?)",
+    "an owner who asks to talk to a human / call them instead",
     "an engaged owner who likes the idea and agrees after one clarifying question",
     "a busy owner whose phone sends a WhatsApp Business auto-reply every time (always reply with the same canned auto-reply text)",
     "a skeptical owner who asks where the numbers come from, then agrees",
@@ -22,7 +26,7 @@ PERSONAS = [
 
 
 async def main():
-    P = Gemini("persona", os.environ.get("PERSONA_MODEL", "gemini-3.6-flash"), os.environ["GEMINI_API_KEY"], 100, 1000)
+    P = Gemini("persona", os.environ.get("PERSONA_MODEL", "gemini-3.5-flash-lite"), os.environ["GEMINI_API_KEY"], 100, 1000)
     c = TestClient(api.app)
     E = "expanded"
     for f in glob.glob(f"{E}/categories/*.json"):
@@ -30,7 +34,7 @@ async def main():
     for f in glob.glob(f"{E}/merchants/*.json"):
         d = json.load(open(f)); c.post("/v1/context", json={"scope": "merchant", "context_id": d["merchant_id"], "version": 1, "payload": d})
     pairs = json.load(open(f"{E}/test_pairs.json"))["pairs"]
-    tids = [p["trigger_id"] for p in pairs if not p["customer_id"]][:10]
+    tids = [p["trigger_id"] for p in pairs if not p["customer_id"]][:14]
     for t in tids:
         d = json.load(open(f"{E}/triggers/{t}.json")); c.post("/v1/context", json={"scope": "trigger", "context_id": t, "version": 1, "payload": d})
     acts = []
@@ -39,7 +43,7 @@ async def main():
     async with httpx.AsyncClient() as h:
         for a, persona in zip(acts, PERSONAS):
             hist = [("Vera", a["body"])]
-            print(f"\n==== {persona}\nVERA: {a['body']}")
+            print(f"\n==== {persona}\nVERA: {a['body']}", flush=True)
             for turn in range(2, 6):
                 prompt = ("You are role-playing an Indian small-business owner on WhatsApp. Persona: " + persona +
                           "\nConversation so far:\n" + "\n".join(f"{w}: {m}" for w, m in hist) +
@@ -51,10 +55,14 @@ async def main():
                         break
                     except Exception:
                         await asyncio.sleep(15 * (attempt + 1))
-                msg = d.get("reply", "ok")
+                msg = d.get("reply") or ""
+                if not msg:
+                    print("  [persona LLM unavailable - stopping this conversation]", flush=True)
+                    break
                 r = c.post("/v1/reply", json={"conversation_id": a["conversation_id"], "merchant_id": a["merchant_id"], "from_role": "merchant",
                                                "message": msg, "turn_number": turn}).json()
-                print(f"MERCHANT: {msg}\n  -> {r['action'].upper()}: {r.get('body') or r.get('rationale')}")
+                print(f"MERCHANT: {msg}\n  -> {r['action'].upper()}: {r.get('body') or r.get('rationale')}", flush=True)
+                await asyncio.sleep(4.5)                      # stay under the free-tier 15 RPM
                 hist += [("Merchant", msg), ("Vera", r.get("body") or f"[{r['action']}]")]
                 if r["action"] != "send":
                     break

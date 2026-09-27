@@ -127,6 +127,11 @@ class Ctx:
         return ins.hi if self.hi else ins.en
 
 
+def V(ctx: "Ctx", slot: str, *options: str) -> str:
+    """Deterministic phrasing variety: each slot picks independently, seeded by trigger id (same input -> same text)."""
+    return options[stable_index(str(ctx.trigger.get("id", "")) + "|" + slot + "|" + str(ctx.variant_offset), len(options))]
+
+
 def _cap(s: str) -> str:
     return s[:1].upper() + s[1:] if s else s
 
@@ -204,8 +209,8 @@ def _customer_offer(ctx: Ctx) -> str:
 
 
 HOOK_PREF = {  # trigger family -> preferred content ids (fallback: keyword match, then first item)
-    "c_trial": ("pc_first_30_days", "pc_pt_or_solo"), "c_lapsed": ("pc_first_30_days", "pc_oral_heart", "pc_post_color_care"),
-    "c_recall": ("pc_oral_heart", "pc_kid_brushing", "pc_post_color_care", "pc_first_30_days"),
+    "c_trial": ("pc_first_30_days", "pc_pt_or_solo"), "c_lapsed": ("pc_first_30_days", "pc_oral_heart"),
+    "c_recall": ("pc_oral_heart", "pc_kid_brushing", "pc_first_30_days"),       # colour-care only via the colour-service branch
     "c_refill": ("pc_generic_branded",), "c_generic": ("pc_oral_heart", "pc_first_30_days", "pc_storage", "pc_thali_economics"),
 }
 
@@ -214,7 +219,7 @@ HOOK_SENT = {  # curated strongest line per known content item (regex over its s
     "pc_oral_heart": r"simplest action", "pc_kid_brushing": r"sensory|pediatric dental consult",
     "pc_aligner_vs_braces": r"Aligners work for", "pc_first_30_days": r"Real strength|Most people quit",
     "pc_pt_or_solo": r"Hybrid", "pc_protein_basics": r"Active adults", "pc_keratin_safe": r"Citric-acid alternatives",
-    "pc_balayage_vs_highlights": r"Balayage holds", "pc_post_color_care": r"Skip these", "pc_generic_branded": r"typically 40-60% cheaper",
+    "pc_balayage_vs_highlights": r"Balayage holds", "pc_post_color_care": r"Three rules", "pc_generic_branded": r"typically 40-60% cheaper",
     "pc_summer_basics": r"heat-stroke", "pc_thali_economics": r"Buying these separately", "pc_ordering_smart": r"filter out 80%",
 }
 HOOK_SKIP = {"pc_storage"}
@@ -499,10 +504,11 @@ def f_perf_dip(ctx: Ctx) -> Draft:
     a_en, a_hi, deliverable = _action_for(ctx, cause)
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hook_hi}", (f"Ek wajah dikh rahi hai: {cause.hi}" if cause else ""),
-                     f"Sabse fast fix: {a_hi}", _cta(ctx, (), ("Shuru karoon?", "Aaj hi kar doon? Reply YES.")))
+                     V(ctx, "fix_hi", "Sabse fast fix", "Sabse aasaan fix", "Pehla kadam") + f": {a_hi}", V(ctx, "dip_ask_hi", "Shuru karoon?", "Aaj hi kar doon? Reply YES.", "Aaj se laga doon?"))
     else:
         body = _join(f"{fs.salutation}, {hook_en}", (f"One likely reason: {cause.en}" if cause else ""),
-                     f"Fastest fix: {a_en}", _cta(ctx, ("Want me to go ahead?", "Shall I do it today? Reply YES."), ()))
+                     V(ctx, "fix_en", "Fastest fix", "Quickest win", "What I'd do first") + f": {a_en}",
+                     V(ctx, "dip_ask_en", "Want me to go ahead?", "Shall I do it today? Reply YES.", "Want me to start today?"))
     return _draft(ctx, body, "binary_yes_no", hook_en, "performance dip quantified vs baseline", deliverable, [cause],
                   "loss aversion + concrete fix")
 
@@ -560,17 +566,17 @@ def f_perf_spike(ctx: Ctx) -> Draft:
     if gap and not driver:
         a_en, a_hi, deliverable = _action_for(ctx, gap)
         if ctx.hi:
-            body = _join(f"{fs.salutation}, achhi khabar — {hhook}", f"Par ek gap hai: {gap.hi}, toh extra traffic convert nahi ho payega",
-                         f"Abhi sahi time hai: {a_hi}", "Kar doon?")
+            body = _join(f"{fs.salutation}, " + V(ctx, "good_hi", "achhi khabar", "badhiya update", "ek positive signal") + f" — {hhook}", f"Par ek gap hai: {gap.hi}, toh extra traffic convert nahi ho payega",
+                         f"Abhi sahi time hai: {a_hi}", V(ctx, "hi_ask", "Kar doon?", "Shuru karoon?", "Aage badhoon?", "Main kar doon — theek hai?"))
         else:
             body = _join(f"{fs.salutation}, good news — {hook}", f"One gap will leak that traffic though: {gap.en}",
                          f"Best time to fix it is now: {a_en}", ctx.pick("Shall I go ahead?", "Want me to do it today?"))
         return _draft(ctx, body, "binary_yes_no", hook, "spike + merchant-state gap: convert the momentum by fixing the visible gap",
                       deliverable, [used, gap], "momentum + loss aversion + effort externalisation")
     if ctx.hi:
-        body = _join(f"{fs.salutation}, achhi khabar — {hhook}" + (f", aur lagta hai {driver} se aa raha hai" if driver else ""),
+        body = _join(f"{fs.salutation}, " + V(ctx, "good_hi", "achhi khabar", "badhiya update", "ek positive signal") + f" — {hhook}" + (f", aur lagta hai {driver} se aa raha hai" if driver else ""),
                      "Momentum pe ek aur push karein" + (f": '{offer}' ke saath ek follow-up post" if offer else ": ek follow-up post"),
-                     "Draft ready hai — daal doon?")
+                     V(ctx, "post_hi", "Draft ready hai — daal doon?", "Post taiyaar hai — live kar doon?", "Draft bana liya hai — publish karoon?"))
     else:
         body = _join(f"{fs.salutation}, good news — {hook}" + (f", most likely from your {driver}" if driver else ""),
                      "Worth riding the momentum" + (f" with a follow-up post featuring '{offer}'" if offer else " with a follow-up post"),
@@ -596,7 +602,7 @@ def f_milestone(ctx: Ctx) -> Draft:
         if views and calls:
             hook = (f"you've had a strong stretch — {views} and {calls} in the last 30 days" if leading
                     else f"your profile is building up — {views} and {calls} in the last 30 days")
-            hhook = (f"aap achhe phase mein ho — pichhle 30 din mein {views} aur {calls}" if leading
+            hhook = (V(ctx, "phase_hi", "aap achhe phase mein ho", "numbers achhe chal rahe hain", "profile ka momentum achha hai") + f" — pichhle 30 din mein {views} aur {calls}" if leading
                      else f"aapka profile build ho raha hai — pichhle 30 din mein {views} aur {calls}")
             used = None
         elif up:
@@ -605,7 +611,8 @@ def f_milestone(ctx: Ctx) -> Draft:
             return f_generic(ctx)
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hhook}", "Abhi happy regulars se ek chhota review request bhejein toh next milestone is hafte pakka ho sakta hai",
-                     "Maine request message draft kar diya hai — bhej doon?")
+                     V(ctx, "req_hi", "Maine request message draft kar diya hai — bhej doon?", "Request message taiyaar hai — regulars ko bhej doon?",
+                       "Ek chhota review request likh diya hai — bhejna shuru karoon?"))
     else:
         body = _join(f"{fs.salutation}, {hook}", "A short review request to your happy regulars right now usually lands the next milestone within a week",
                      ctx.pick("I've drafted the request — want me to send it?", "Shall I share the ready-to-send review request?"))
@@ -631,11 +638,13 @@ def f_review_theme(ctx: Ctx) -> Draft:
             stake = f" — with {views} and {calls} in the last 30 days, searchers read these before they call" if calls and views else ""
             hstake = f" — 30 din mein {views} aur {calls}; log call karne se pehle yahi reviews padhte hain" if calls and views else ""
             hook = f"the same point is coming up again in your recent reviews{stake}"
-            hhook = f"aapke recent reviews mein ek hi baat baar-baar aa rahi hai{hstake}"
+            hhook = V(ctx, "rev_open", "aapke recent reviews mein ek hi baat baar-baar aa rahi hai", "recent reviews mein ek pattern dikh raha hai",
+                      "pichhle kuch reviews mein ek hi point repeat ho raha hai") + hstake
             q, used = "", None
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hhook}{q}", "Public reply + ek chhota fix se agle reviews badal jaate hain",
-                     "Maine polite replies draft kiye hain — bhej doon?")
+                     V(ctx, "rev_hi", "Maine polite replies draft kiye hain — bhej doon?", "Replies taiyaar hain — aap dekh lenge?",
+                       "Har review ka ek calm reply likh diya hai — post karoon?"))
     else:
         body = _join(f"{fs.salutation}, {hook}{q}", "Unanswered, this pattern starts showing up in searchers' first impression",
                      ctx.pick("I've drafted calm public replies you can approve — want them?", "Want me to send over ready replies for these reviews?"))
@@ -659,7 +668,7 @@ def f_competitor(ctx: Ctx) -> Draft:
                      "Price war mein jaane ki zaroorat nahi" + (f" — aapka edge: {strength.hi}" if strength else ""),
                      (f"Aapka '{mine[0]}' already strong hai; " if mine else "") + "ek post jo aapki quality highlight kare, woh draft kar doon?")
     else:
-        body = _join(f"{fs.salutation}, heads-up — {hook}",
+        body = _join(f"{fs.salutation}, " + V(ctx, "hu_en", "heads-up", "quick flag", "worth knowing") + f" — {hook}",
                      "I wouldn't match the price" + (f" — your edge: {strength.en}" if strength else "; compete on trust and experience instead"),
                      (f"Keep '{mine[0]}' as the entry offer, and " if mine else "") + ctx.pick("want me to draft a post that leans on that?",
                                                                                             "shall I draft a Google post that highlights it?"))
@@ -691,9 +700,10 @@ def f_festival(ctx: Ctx) -> Draft:
         if ctx.hi:
             body = _join(f"{fs.salutation}, festive season ki planning ka time hai — {season.hi}",
                          "Early bookings pakadne ke liye" + (f" '{offer}' ke around" if offer else "") + " ek festive package abhi set kar lete hain",
-                         "Draft bhej doon?")
+                         V(ctx, "draft_hi", "Draft bhej doon?", "Package draft kar doon?", "Ek draft bana ke bhejoon?"))
         else:
-            body = _join(f"{fs.salutation}, the festive calendar is coming up — {season.en}",
+            body = _join(f"{fs.salutation}, " + V(ctx, "fest_en", "the festive calendar is coming up", "festive season planning starts now",
+                                                     "it's a good moment to plan for the festive rush") + f" — {season.en}",
                          "An early festive package" + (f" built around '{offer}'" if offer else "") + " catches planners before the rush",
                          ctx.pick("Want me to draft it?", "Shall I draft the package + a Google post?"))
         return _draft(ctx, body, "binary_yes_no", season.en, "festival trigger (no date in payload) -> category seasonal beat for this month",
@@ -703,7 +713,7 @@ def f_festival(ctx: Ctx) -> Draft:
     if ctx.hi:
         body = _join(f"{fs.salutation}, {hwhen}", (f"{beat['month_range']} mein {beat['note']}" if beat else ""),
                      f"Early bookings pakadne ke liye {fest} package" + (f" '{offer}' ke around" if offer else "") + " abhi set kar lete hain",
-                     "Draft bhej doon?")
+                     V(ctx, "draft_hi", "Draft bhej doon?", "Package draft kar doon?", "Ek draft bana ke bhejoon?"))
     else:
         body = _join(f"{fs.salutation}, {when}", (f"For {fs.noun[2]}, {beat['month_range']} is the {beat['note']}" if beat else ""),
                      f"Locking an early {fest} package" + (f" built around '{offer}'" if offer else "") + " now catches the planners before the rush",
@@ -799,7 +809,7 @@ def f_trend(ctx: Ctx) -> Draft:
         match = next((o for o in _active_offers(ctx.merchant) + _catalog(ctx.category) if any(w in o.lower() for w in q.lower().split()[:2])), "")
         if ctx.hi:
             body = _join(f"{fs.salutation}, {tr.hi}", f"{fs.locality or 'Aapke area'} ke searchers ke liye ek post" + (f" '{match}' ke saath" if match else " is service pe"),
-                         "Draft kar doon?")
+                         V(ctx, "draft2_hi", "Draft kar doon?", "Post bana doon?", "Ek post draft karoon?"))
         else:
             body = _join(f"{fs.salutation}, {tr.en}", f"A post aimed at searchers in {fs.locality or 'your area'}" + (f" featuring '{match}'" if match else " about this service") + " would catch that demand",
                          ctx.pick("Want me to draft it?", "Shall I prepare the post?"))
@@ -809,7 +819,7 @@ def f_trend(ctx: Ctx) -> Draft:
     offer = _best_offer(ctx)
     if ctx.hi:
         body = _join(f"{fs.salutation}, {tr.hi}", f"Isko pakadne ke liye {fs.locality or 'aapke area'} ke searchers ke liye ek post" + (f" '{offer}' ke saath" if offer else ""),
-                     "Draft kar doon?")
+                     V(ctx, "draft2_hi", "Draft kar doon?", "Post bana doon?", "Ek post draft karoon?"))
     else:
         body = _join(f"{fs.salutation}, {tr.en}", f"A post aimed at searchers in {fs.locality or 'your area'}" + (f" featuring '{offer}'" if offer else "") + " would catch that demand",
                      ctx.pick("Want me to draft it?", "Shall I prepare the post?"))
@@ -879,11 +889,11 @@ def f_event(ctx: Ctx) -> Draft:
     implication = _first_sentence(rel.get("actionable") or rel.get("summary")) if rel else ""
     offer = _best_offer(ctx)
     if ctx.hi:
-        body = _join(f"{fs.salutation}, heads-up — {kind}: {head}", implication,
+        body = _join(f"{fs.salutation}, " + V(ctx, "hu_hi", "heads-up", "dhyan dijiye", "ek zaroori update") + f" — {kind}: {head}", implication,
                      (f"Main '{offer}' ke saath iske hisaab se ek quick update" if offer else "Main iske hisaab se ek quick update") + " customers ke liye draft kar sakti hoon",
-                     "Bhej doon?")
+                     V(ctx, "send_hi", "Bhej doon?", "Customers ko bhej doon?", "Shuru karoon?"))
     else:
-        body = _join(f"{fs.salutation}, heads-up — {kind}: {head}", implication,
+        body = _join(f"{fs.salutation}, " + V(ctx, "hu_en", "heads-up", "quick flag", "worth knowing") + f" — {kind}: {head}", implication,
                      "I can draft a quick customer update around this" + (f", leading with '{offer}'" if offer else ""),
                      ctx.pick("Want me to prepare it?", "Shall I draft it now?"))
     return _draft(ctx, body, "binary_yes_no", f"{kind}: {head}", f"unseen trigger '{ctx.trigger.get('kind')}' rendered from its own payload" +
@@ -930,12 +940,14 @@ def f_renewal(ctx: Ctx) -> Draft:
         body = _join(f"{fs.salutation}, aapka {plan or ''} plan {days} din mein renew hona hai{amt_s}".replace("  ", " "),
                      (f"Pichhle 30 din mein profile pe {views} aur {calls} aaye" if views and calls else ""),
                      (f"Waise {dip.hi} — renew ke saath main profile refresh bhi kar doongi" if dip else "Renew ke saath main profile refresh bhi kar doongi"),
-                     "Renewal link ki jagah main sab process kar doon? Reply YES.")
+                     V(ctx, "ren_hi", "Renewal link ki jagah main sab process kar doon? Reply YES.", "Main renewal process kar doon? Bas YES reply karein.",
+                       "Renewal aaj hi kar doon, taaki listing band na ho? Reply YES."))
     else:
         body = _join(f"{fs.salutation}, your {plan or ''} plan renews in {days} days{amt_s}".replace("  ", " "),
                      (f"In the last 30 days your listing brought in {views} and {calls}" if views and calls else ""),
                      (f"Also, {dip.en} — I'll pair the renewal with a profile refresh to fix that" if dip else "I'll pair the renewal with a quick profile refresh"),
-                     "Want me to process it so nothing goes offline? Reply YES.")
+                     V(ctx, "ren_en", "Want me to process it so nothing goes offline? Reply YES.", "Shall I renew it now so the listing stays live? Reply YES.",
+                       "A quick YES and I'll handle the renewal today."))
     return _draft(ctx, body, "binary_yes_no", f"renewal in {days} days", "renewal due; value recap from 30d performance", "renewal+refresh",
                   [dip], "loss aversion + value recap")
 
@@ -973,8 +985,11 @@ def f_dormant(ctx: Ctx) -> Draft:
     top = ctx.insight(prefer=("perf", "visibility", "offer", "trend"))
     a_en, a_hi, deliv = _action_for(ctx, top)
     if ctx.hi:
-        body = _join(f"{fs.salutation}, {days} din ho gaye baat kiye" if days else f"{fs.salutation}, kaafi din ho gaye",
-                     (f"Is beech ek cheez notice ki: {top.hi}" if top else ""), f"Mera suggestion: {a_hi}", "Karoon?")
+        body = _join((f"{fs.salutation}, " + V(ctx, "dorm_hi", f"{days} din ho gaye baat kiye", f"pichhli baat ko {days} din ho gaye",
+                                                   f"{days} din se hum baat nahi kar paaye")) if days else
+                     f"{fs.salutation}, " + V(ctx, "dorm_hi2", "kaafi din ho gaye", "bahut din baad baat ho rahi hai", "kaafi time ho gaya"),
+                     (V(ctx, "notice_hi", "Is beech ek cheez notice ki", "Is dauran ek baat dikhi", "Beech mein ek cheez pakdi") + f": {top.hi}" if top else ""),
+                     V(ctx, "sugg_hi", "Mera suggestion", "Mera plan", "Jo main karungi") + f": {a_hi}", V(ctx, "hi_ask", "Kar doon?", "Shuru karoon?", "Aage badhoon?", "Main kar doon — theek hai?"))
     else:
         body = _join(f"{fs.salutation}, it's been {days} days since we last spoke" if days else f"{fs.salutation}, it's been a while",
                      (f"One thing I noticed meanwhile: {top.en}" if top else ""), f"My suggestion: {a_en}",
@@ -1075,7 +1090,7 @@ def f_generic(ctx: Ctx) -> Draft:
     a_en, a_hi, deliv = _action_for(ctx, top)
     if ctx.hi:
         body = _join(f"{fs.salutation}, {top.hi}" if top else f"{fs.salutation}, {fs.biz} ke liye ek quick update",
-                     f"Suggestion: {a_hi}", "Kar doon?")
+                     V(ctx, "sugg_hi", "Suggestion", "Mera plan", "Quick fix") + f": {a_hi}", V(ctx, "hi_ask", "Kar doon?", "Shuru karoon?", "Aage badhoon?", "Main kar doon — theek hai?"))
     else:
         body = _join(f"{fs.salutation}, {top.en}" if top else f"{fs.salutation}, a quick update for {fs.biz}",
                      f"Suggestion: {a_en}", ctx.pick("Want me to go ahead?", "Shall I set it up?"))
@@ -1136,8 +1151,9 @@ def f_c_recall(ctx: Ctx) -> Draft:
             slot_en, slot_hi = f"We've kept a slot for you: {opts}", f"Aapke liye ek slot rakha hai: {hopts}"
             cta = "binary_yes_no"
     else:
-        cta_en = "Reply YES and we'll share a couple of " + (f"{pref} " if pref else "") + "slots."
-        cta_hi = "YES reply karein, hum " + (f"{pref} " if pref else "") + "slots bhej denge."
+        cta_en = V(ctx, "rc_en", "Reply YES and we'll share a couple of ", "Just reply YES for a couple of ", "Say YES and we'll send you two ") + \
+            (f"{pref} " if pref else "") + "slots."
+        cta_hi = V(ctx, "rc_hi", "YES reply karein, hum ", "Bas YES likhiye, hum ", "YES bhejiye, hum turant ") + (f"{pref} " if pref else "") + "slots bhej denge."
         slot_en = slot_hi = ""
         cta = "binary_yes_no"
     hook, _ = _value_hook(ctx) if not slots else ("", "")
@@ -1163,10 +1179,12 @@ def f_c_appointment(ctx: Ctx) -> Draft:
     hwho = f" Dr. {fs.owner} ke saath" if fs.category == "dentists" and fs.owner else ""
     if ctx.hi:
         body = _join(_c_open(ctx), f"Reminder: kal{when}{hwho} aapka appointment hai" + (f" (pichhli baar: {svc})" if svc else ""),
-                     "Confirm karne ke liye YES reply karein, ya time badalna ho toh batayein.")
+                     V(ctx, "appt_hi", "Confirm karne ke liye YES reply karein, ya time badalna ho toh batayein.",
+                       "YES reply karke confirm kar dijiye — time badalna ho toh bata dijiye.", "Aa rahe hain toh YES likhiye, warna naya time batayein."))
     else:
         body = _join(_c_open(ctx), f"a quick reminder that your appointment{who} is tomorrow{when}" + (f" (last time: {svc})" if svc else ""),
-                     "Reply YES to confirm, or tell us if another time works better.")
+                     V(ctx, "appt_en", "Reply YES to confirm, or tell us if another time works better.",
+                       "A quick YES confirms it — or tell us a time that suits you better.", "Reply YES if you're coming, or share a better time."))
     return _draft(ctx, body, "binary_yes_no", "appointment tomorrow", "transactional reminder; no invented time", "confirmation", [],
                   "commitment + easy reschedule")
 
@@ -1333,7 +1351,7 @@ def f_via_merchant(ctx: Ctx) -> Draft:
     hoffer = f" {' / '.join(slots[:2])} slots ke saath" if slots else ""
     if ctx.hi:
         body = _join(f"{fs.salutation}, {who} ka {what} due hai{detail}", f"Maine unka reminder{hoffer} draft kar diya hai, aapke naam se jayega",
-                     "Bhej doon?")
+                     V(ctx, "send_hi", "Bhej doon?", "Customers ko bhej doon?", "Shuru karoon?"))
     else:
         body = _join(f"{fs.salutation}, {who}'s {what} is due{detail}", f"I've drafted the reminder{offer}, to go out from your number",
                      "Shall I send it?")
