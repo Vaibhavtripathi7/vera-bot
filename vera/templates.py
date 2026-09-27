@@ -48,6 +48,8 @@ KEYWORD_FAMILY = [  # unknown kinds -> nearest family by keyword (order matters)
 
 
 def family_for(kind: str, scope: str) -> str:
+    if kind.endswith("__via_merchant"):
+        return "via_merchant"
     fam = FAMILY_OF_KIND.get(kind)
     if not fam:
         k = (kind or "").lower()
@@ -234,9 +236,10 @@ def _join(*parts: str) -> str:
 def _draft(ctx: Ctx, body: str, cta: str, hook: str, why: str, deliverable: str, used: list, lever: str) -> Draft:
     tname = f"vera_{ctx.family}_v1" if not ctx.family.startswith("c_") else f"merchant_{ctx.family[2:]}_v1"
     ids = [i.id for i in used if i]
-    rationale = f"{ctx.trigger.get('kind')}: {why}. Lever: {lever}. Lang: {ctx.fs.lang}."
+    kind = str(ctx.trigger.get("kind") or "").replace("__via_merchant", " (merchant approval)")
+    rationale = f"{kind}: {why}. Lever: {lever}. Lang: {ctx.fs.lang}."
     if ids:
-        rationale = f"{ctx.trigger.get('kind')}: {why}; merchant anchor={','.join(ids)}. Lever: {lever}. Lang: {ctx.fs.lang}."
+        rationale = f"{kind}: {why}; merchant anchor={','.join(ids)}. Lever: {lever}. Lang: {ctx.fs.lang}."
     return Draft(body=re.sub(r"\s+", " ", body).strip(), cta=cta, template_name=tname,
                  template_params=[ctx.fs.salutation if ctx.fs.reader == "merchant" else ctx.fs.customer_name, hook, deliverable],
                  rationale=rationale[:300], deliverable=deliverable, insights_used=ids)
@@ -1157,7 +1160,32 @@ def f_c_generic(ctx: Ctx) -> Draft:
                   "booking", [], "relationship + low friction")
 
 
+def f_via_merchant(ctx: Ctx) -> Draft:
+    """Customer-scope trigger but no customer context: tell the merchant, offer to send the drafted note."""
+    fs, p = ctx.fs, ctx.payload
+    kind = ctx.trigger.get("_orig_kind") or ctx.trigger.get("kind", "").replace("__via_merchant", "")
+    m = re.match(r"c_\d+_([a-z]+)", str(ctx.trigger.get("customer_id") or ""))
+    who = m.group(1).capitalize() if m and m.group(1) not in ("anonymous", "new") else f"one of your {fs.noun[1]}"
+    fs.allow_text(who)
+    what = humanize(p.get("service_due") or kind.replace("_due", "")).replace("6 month", "6-month")
+    last = fmt_date(p.get("last_service_date"))
+    slots = [x.get("label") for x in (p.get("available_slots") or []) if x.get("label")]
+    mols = p.get("molecule_list") or []
+    detail = (f" (last visit {last})" if last else "") + (f" — molecules: {', '.join(mols)}" if mols else "")
+    offer = f" with the {' / '.join(slots[:2])} slots" if slots else ""
+    hoffer = f" {' / '.join(slots[:2])} slots ke saath" if slots else ""
+    if ctx.hi:
+        body = _join(f"{fs.salutation}, {who} ka {what} due hai{detail}", f"Maine unka reminder{hoffer} draft kar diya hai, aapke naam se jayega",
+                     "Bhej doon?")
+    else:
+        body = _join(f"{fs.salutation}, {who}'s {what} is due{detail}", f"I've drafted the reminder{offer}, to go out from your number",
+                     "Shall I send it?")
+    return _draft(ctx, body, "binary_yes_no", f"{who} {what}", f"customer-scope '{kind}' without customer context -> merchant approval flow",
+                  "customer_reminder", [], "effort externalisation + single binary")
+
+
 FAMILIES = {
+    "via_merchant": f_via_merchant,
     "research": f_research, "cde": f_cde, "compliance": f_compliance, "perf_dip": f_perf_dip,
     "seasonal_dip": f_seasonal_dip, "perf_spike": f_perf_spike, "milestone": f_milestone,
     "review_theme": f_review_theme, "competitor": f_competitor, "festival": f_festival, "ipl": f_ipl,

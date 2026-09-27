@@ -77,9 +77,8 @@ class Scheduler:
                 continue
             cust_id = trg.get("customer_id")
             customer = s.get("customer", cust_id) if cust_id else None
-            if trg.get("scope") == "customer" and cust_id and not customer:
-                skipped.append((tid, "customer context missing"))
-                continue
+            # customer-scope trigger without a customer context: brief the merchant instead of going silent
+            via_merchant = trg.get("scope") == "customer" and not customer
             key = trg.get("suppression_key") or f"{trg.get('kind')}:{tid}"
             if key in s.suppressed:
                 skipped.append((tid, "already sent (suppression key)"))
@@ -105,6 +104,8 @@ class Scheduler:
             if mst.get("unanswered", 0) >= 3 and not customer:
                 skipped.append((tid, "3 unanswered nudges - holding off"))
                 continue
+            if via_merchant:
+                trg = {**trg, "scope": "merchant", "kind": f"{trg.get('kind')}__via_merchant", "_orig_kind": trg.get("kind")}
             out.append({"score": score, "trigger": trg, "merchant": merchant, "category": category,
                         "customer": customer, "key": key, "consent": why})
         out.sort(key=lambda c: (-c["score"], c["trigger"].get("id", "")))

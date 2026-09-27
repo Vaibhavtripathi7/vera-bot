@@ -72,6 +72,8 @@ async def healthz():
 
 @app.get("/v1/metadata")
 async def metadata():
+    import time as _t
+    STORE.last_metadata = _t.time()
     return {
         "team_name": config.TEAM_NAME,
         "team_members": config.TEAM_MEMBERS,

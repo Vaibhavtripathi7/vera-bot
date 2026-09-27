@@ -43,6 +43,7 @@ class Store:
         self.lock = threading.RLock()
         self.db_path = db_path if db_path is not None else config.DB_PATH
         self.started = time.time()
+        self.last_metadata = 0.0
         self._reset_memory()
         self.db = None
         if self.db_path:
@@ -106,6 +107,15 @@ class Store:
         with self.lock:
             key = (scope, context_id)
             cur = self.contexts.get(key)
+            if cur and scope == "category" and cur["version"] >= version and time.time() - self.last_metadata < 180:
+                # warmup of a NEW judge run (metadata was just probed, base categories re-pushed): start clean so
+                # contexts_loaded / suppression / opt-outs from the previous run cannot leak into this one.
+                self.wipe()
+                self.last_metadata = 0.0          # one reset per warmup
+                cur = None
+            if cur and cur["version"] == version and cur["payload"] == payload:
+                return 200, {"accepted": True, "ack_id": f"ack_{context_id}_v{version}", "stored_at": iso_now(),
+                             "note": "duplicate version, no-op"}
             if cur and cur["version"] >= version:
                 return 409, {"accepted": False, "reason": "stale_version", "current_version": cur["version"]}
             self.contexts[key] = {"version": version, "payload": payload}

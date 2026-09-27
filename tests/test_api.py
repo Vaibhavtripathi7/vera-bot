@@ -23,6 +23,7 @@ def _load(sub, key):
 @pytest.fixture()
 def client():
     api.STORE.wipe()
+    api.STORE.last_metadata = 0.0
     pipeline.CACHE.clear()
     return TestClient(api.app)
 
@@ -51,6 +52,9 @@ def test_health_and_metadata(client):
 def test_warmup_counts_and_versioning(client):
     push_all(client, triggers=False)
     assert client.get("/v1/healthz").json()["contexts_loaded"] == {"category": 5, "merchant": 50, "customer": 200, "trigger": 0}
+    m1 = json.load(open(EXP / "merchants" / "m_001_drmeera_dentist_delhi.json"))
+    same = client.post("/v1/context", json={"scope": "merchant", "context_id": m1["merchant_id"], "version": 1, "payload": m1})
+    assert same.status_code == 200 and same.json()["accepted"] is True            # identical re-post = no-op
     body = {"scope": "merchant", "context_id": "m_001_drmeera_dentist_delhi", "version": 1, "payload": {"x": 1}}
     r = client.post("/v1/context", json=body)
     assert r.status_code == 409 and r.json() == {"accepted": False, "reason": "stale_version", "current_version": 1}
@@ -144,3 +148,22 @@ def test_deterministic(client):
     push_all(client)
     b = client.post("/v1/tick", json={"now": "2026-09-27T10:00:00Z", "available_triggers": ids}).json()
     assert [x["body"] for x in a["actions"]] == [x["body"] for x in b["actions"]]
+
+
+def test_new_judge_run_resets_state(client):
+    push_all(client)
+    client.post("/v1/tick", json={"now": "2026-09-27T10:00:00Z", "available_triggers": ["trg_001_research_digest_dentists"]})
+    client.post("/v1/reply", json={"conversation_id": "x", "merchant_id": "m_001_drmeera_dentist_delhi", "from_role": "merchant",
+                                   "message": "Stop messaging me", "turn_number": 2})
+    # mid-test category re-push (no metadata probe) must NOT wipe
+    d = json.load(open(EXP / "categories" / "dentists.json"))
+    client.post("/v1/context", json={"scope": "category", "context_id": "dentists", "version": 1, "payload": d})
+    assert client.get("/v1/healthz").json()["contexts_loaded"]["trigger"] > 0
+    # new run: metadata probe + base re-push -> clean slate, the old opt-out is gone
+    client.get("/v1/metadata")
+    push_all(client, triggers=False)
+    assert client.get("/v1/healthz").json()["contexts_loaded"] == {"category": 5, "merchant": 50, "customer": 200, "trigger": 0}
+    t = json.load(open(EXP / "triggers" / "trg_001_research_digest_dentists.json"))
+    client.post("/v1/context", json={"scope": "trigger", "context_id": t["id"], "version": 1, "payload": t})
+    acts = client.post("/v1/tick", json={"now": "2026-09-27T11:00:00Z", "available_triggers": [t["id"]]}).json()["actions"]
+    assert len(acts) == 1

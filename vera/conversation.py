@@ -402,6 +402,15 @@ class ReplyEngine:
                            "Next: I'll filter your repeat-Rx list for these batches. Reply CONFIRM to send.",
                            f"Customer note draft: \"{name} se namaste. {p.get('molecule', 'aapki dawai')} ka batch ({b}) precaution ke liye replace ho raha hai — strip le aayein ya reply karein, hum replacement deliver kar denge.\" "
                            "Next: repeat-Rx list mein in batches wale customers filter kar doongi. Bhejne ke liye CONFIRM reply karein.")
+        if d == "customer_reminder":
+            p = trigger.get("payload") or {}
+            m = re.match(r"c_\d+_([a-z]+)", str(trigger.get("customer_id") or ""))
+            who = m.group(1).capitalize() if m else ""
+            what = humanize(p.get("service_due") or str(trigger.get("kind", "")).replace("_due", "")).replace("6 month", "6-month")
+            slots = " or ".join(x.get("label") for x in (p.get("available_slots") or [])[:2] if x.get("label"))
+            note = f"Hi {who}, {name} here. Your {what} is due" + (f" — we've kept {slots} for you" if slots else "") + ". Reply to book."
+            return self._t(conv, f"Here's the reminder going out from your number: \"{note}\" Reply CONFIRM and I'll send it now.",
+                           f"Yeh reminder aapke number se jayega: \"{note}\" CONFIRM reply karein, abhi bhej doongi.")
         if d == "review_request":
             return self._t(conv, f"Here's the review request: \"Thanks for choosing {name}! If we made your day, a quick Google review helps neighbours find us 🙏\" Reply CONFIRM and I'll send it to your recent regulars.",
                            f"Review request draft: \"{name} choose karne ke liye shukriya! Achha laga ho toh ek Google review se aas-paas ke logon ko madad milegi 🙏\" CONFIRM reply karein, recent regulars ko bhej doongi.")
