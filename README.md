@@ -37,6 +37,13 @@ context push ─► FactSheet (typed, provenance-tagged facts; all arithmetic in
   - `/tick` is deadline-bounded at 7.5 s; LLM calls use batches, token buckets per provider, circuit breakers and a template fallback.
   - State is written through to SQLite and auto-wiped between judge runs.
 
+## Measured results (local replica of the official judge prompt)
+
+- **30 canonical pairs:** 43.4/50 average. Specificity 8.7, category fit 9.0, merchant fit 8.9, decision quality 8.6, engagement 8.2.
+- **60-minute lifecycle replica** (113 messages, including never-seen triggers, digest items and customers injected mid-run): 42.5/50 average, 0 operational penalties, tick p99 under 3.5s on the deployed free instance.
+- **Official `judge_simulator.py`:** warmup, auto-reply, intent and hostile scenarios all pass.
+- **Hardening from testing against LLM-played merchants:** customer STOP never silences the merchant; conversations move through stages (draft → done → follow-on → wrap-up) instead of looping; the bot writes Roman script only.
+
 ## Model choice and tradeoffs
 
 - **Writer:** Gemini 3.5 Flash (with 3.8 Flash pooled in), thinking minimal for latency. **Critic:** Gemini 3.5 Flash-Lite. **Fallback writer:** Groq Llama-3.3-70B. All run at temperature 0 with a fixed seed, and responses are cached by prompt hash.

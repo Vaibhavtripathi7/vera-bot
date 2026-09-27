@@ -54,7 +54,7 @@ def test_warmup_counts_and_versioning(client):
     assert client.get("/v1/healthz").json()["contexts_loaded"] == {"category": 5, "merchant": 50, "customer": 200, "trigger": 0}
     m1 = json.load(open(EXP / "merchants" / "m_001_drmeera_dentist_delhi.json"))
     same = client.post("/v1/context", json={"scope": "merchant", "context_id": m1["merchant_id"], "version": 1, "payload": m1})
-    assert same.status_code == 200 and same.json()["accepted"] is True            # identical re-post = no-op
+    assert same.status_code == 409 and same.json()["current_version"] == 1   # api-call-examples 1.5
     body = {"scope": "merchant", "context_id": "m_001_drmeera_dentist_delhi", "version": 1, "payload": {"x": 1}}
     r = client.post("/v1/context", json=body)
     assert r.status_code == 409 and r.json() == {"accepted": False, "reason": "stale_version", "current_version": 1}
@@ -202,3 +202,9 @@ def test_tick_actions_carry_structured_rationale_and_template(client):
     for k in ("Why now:", "Anchors:", "Lever:", "Guardrails:"):
         assert k in a["rationale"]
     assert "%" not in a["body"]
+
+
+def test_readme_served(client):
+    r = client.get("/README.md")
+    assert r.status_code == 200 and "Vera" in r.text
+    assert client.get("/").json()["readme"] == "/README.md"

@@ -113,9 +113,6 @@ class Store:
                 self.wipe()
                 self.last_metadata = 0.0          # one reset per warmup
                 cur = None
-            if cur and cur["version"] == version and cur["payload"] == payload:
-                return 200, {"accepted": True, "ack_id": f"ack_{context_id}_v{version}", "stored_at": iso_now(),
-                             "note": "duplicate version, no-op"}
             if cur and cur["version"] >= version:
                 return 409, {"accepted": False, "reason": "stale_version", "current_version": cur["version"]}
             self.contexts[key] = {"version": version, "payload": payload}

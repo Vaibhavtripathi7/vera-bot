@@ -57,10 +57,24 @@ async def _json(request: Request):
     return data, None
 
 
+README_PATH = os.path.join(os.path.dirname(__file__), "..", "README.md")
+
+
 @app.get("/")
 @app.head("/")
 async def root():
-    return {"service": "vera-bot", "status": "ok"}
+    return {"service": "vera-bot", "status": "ok", "readme": "/README.md",
+            "endpoints": ["/v1/healthz", "/v1/metadata", "/v1/context", "/v1/tick", "/v1/reply"]}
+
+
+@app.get("/README.md")
+@app.get("/readme")
+async def readme():
+    from fastapi.responses import PlainTextResponse
+    try:
+        return PlainTextResponse(open(README_PATH, encoding="utf-8").read(), media_type="text/markdown; charset=utf-8")
+    except OSError:
+        return PlainTextResponse("README unavailable", status_code=404)
 
 
 @app.get("/v1/healthz")
