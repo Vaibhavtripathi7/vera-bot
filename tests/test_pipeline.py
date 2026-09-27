@@ -114,3 +114,12 @@ def test_critic_picks_best(monkeypatch):
         return {"scores": [{"id": rows[0]["id"], "candidate": 0, "total": 38}, {"id": rows[0]["id"], "candidate": 1, "total": 46}]}
     it = _run(monkeypatch, writer, critic)
     assert it.chosen.source == "llm"
+
+
+def test_non_latin_script_rejected(monkeypatch):
+    async def writer(prompt):
+        return {"items": [{"id": _id(prompt), "bodies": [
+            "Ramesh, Jaipur mein 44°C ka IMD orange alert chal raha hai اگلے 3 din ke liye. ORS aur sunscreen aage rakhein. Update bhej doon?"]}]}
+    it = _run(monkeypatch, writer)
+    assert it.chosen.source == "template"
+    assert any("non_latin_script" in r["violations"] for r in pipeline.REJECTS)

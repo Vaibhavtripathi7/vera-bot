@@ -95,6 +95,8 @@ def validate(body: str, fs: FactSheet, *, category: dict | None = None, prior_bo
     # language
     if DEVANAGARI_RE.search(body):
         v.append("devanagari")
+    if any(ch.isalpha() and ord(ch) > 0x24F for ch in body):     # Arabic/Urdu, Devanagari, Tamil, CJK... (Roman script only)
+        v.append("non_latin_script")
     words = set(re.findall(r"[a-z']+", low))
     if require_hinglish and len(words & HINDI_MARKERS) < 2:
         v.append("language:hinglish_expected")
