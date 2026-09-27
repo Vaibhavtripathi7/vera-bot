@@ -145,6 +145,18 @@ def _first_sentence(text: str | None, max_len: int = 170) -> str:
     return s if len(s) <= max_len else s[:max_len].rsplit(" ", 1)[0] + "…"
 
 
+def _days_left(ctx: Ctx, iso) -> int | None:
+    """Honest urgency: whole days from the tick's 'now' to a real future date (None if unknown, past, or far away)."""
+    d = parse_dt(iso) if isinstance(iso, str) else None
+    if not d or not ctx.now:
+        return None
+    n = (d - ctx.now).days
+    if 0 < n <= 120:
+        ctx.fs.allow_number(n)
+        return n
+    return None
+
+
 def _pretty_dates(text: str, fs: FactSheet) -> str:
     def sub(m):
         d = parse_dt(m.group(0))
@@ -347,6 +359,9 @@ def f_cde(ctx: Ctx) -> Draft:
     if not d:
         return f_generic(ctx)
     when = fmt_date(d.get("date")) or ""
+    left = _days_left(ctx, d.get("date"))
+    if left and when:
+        when = f"{when} (in {left} days)"
     dt = parse_dt(d.get("date"))
     tm = f", {dt.hour % 12 or 12}{'pm' if dt.hour >= 12 else 'am'}" if dt and dt.hour else ""
     credits = p.get("credits") or d.get("credits")
@@ -388,15 +403,18 @@ def f_compliance(ctx: Ctx) -> Draft:
     if not d:
         return f_generic(ctx)
     deadline = fmt_date(p.get("deadline_iso")) or ""
+    left = _days_left(ctx, p.get("deadline_iso"))
+    urgency_en = f" — {left} days left" if left else ""
+    urgency_hi = f" — sirf {left} din baaki" if left else ""
     title = _pretty_dates(d.get("title", "").rstrip("."), fs)
     gist = _first_sentence(d.get("summary"))
     act = d.get("actionable", "")
     if ctx.hi:
-        body = _join(f"{fs.salutation}, compliance heads-up: {title} ({d.get('source', '')})", gist,
+        body = _join(f"{fs.salutation}, compliance heads-up: {title} ({d.get('source', '')}){urgency_hi}", gist,
                      (f"{deadline} se pehle: {act}" if deadline and not re.search(r"before|by ", act, re.I) else act),
                      "Aapki team ke liye 3-point checklist ready hai — bhej doon?")
     else:
-        body = _join(f"{fs.salutation}, compliance heads-up — {title} ({d.get('source', '')})", gist,
+        body = _join(f"{fs.salutation}, compliance heads-up — {title} ({d.get('source', '')}){urgency_en}", gist,
                      (f"Before {deadline}: {act[0].lower() + act[1:]}" if deadline and act and not re.search(r"before|by ", act, re.I) else act),
                      ctx.pick("I've put together a 3-point checklist for your team — want it?",
                               "Want me to send a 3-point checklist your staff can follow?"))
