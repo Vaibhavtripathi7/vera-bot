@@ -167,3 +167,20 @@ def test_new_judge_run_resets_state(client):
     client.post("/v1/context", json={"scope": "trigger", "context_id": t["id"], "version": 1, "payload": t})
     acts = client.post("/v1/tick", json={"now": "2026-09-27T11:00:00Z", "available_triggers": [t["id"]]}).json()["actions"]
     assert len(acts) == 1
+
+
+def test_commit_flow_stages_and_no_loops(client):
+    push_all(client)
+    for tid, expect in (("trg_023_competitor_opened_dentist", "explains everything patiently"),
+                        ("trg_022_cde_webinar_dentists", "Digital impressions")):
+        a = client.post("/v1/tick", json={"now": "2026-09-27T10:00:00Z", "available_triggers": [tid]}).json()["actions"][0]
+        bodies, actions = [], []
+        for n, msg in enumerate(["ok", "ok", "ok", "ok", "ok"]):
+            r = client.post("/v1/reply", json={"conversation_id": a["conversation_id"], "merchant_id": a["merchant_id"],
+                                               "from_role": "merchant", "message": msg, "turn_number": n + 2}).json()
+            actions.append(r["action"])
+            if r["action"] == "send":
+                bodies.append(r["body"])
+        assert expect in bodies[0]
+        assert len(set(bodies)) == len(bodies), "a reply body repeated"
+        assert actions[-1] == "end" and "Status: \"Dr.\"" not in " ".join(bodies)

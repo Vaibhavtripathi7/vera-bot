@@ -468,8 +468,8 @@ class ReplyEngine:
             return self._t(conv, "Here's the reply I've drafted: \"Thank you for the honest feedback — we've fixed this with the team and would love to welcome you back.\" Reply CONFIRM and I'll post it on each of those reviews.",
                            "Reply draft yeh raha: \"Honest feedback ke liye shukriya — team ke saath isko fix kar diya hai, aapka phir se swagat hai.\" CONFIRM reply karein, sab reviews pe post kar doongi.")
         if d == "registration_details" and dig:
-            return self._t(conv, f"Here are the details: {dig.get('title')} — {_first_sentence(dig.get('summary'))} {dig.get('actionable', '')} Reply CONFIRM and I'll add it to your calendar.",
-                           f"Details yeh rahe: {dig.get('title')} — {_first_sentence(dig.get('summary'))} {dig.get('actionable', '')} CONFIRM reply karein, calendar mein add kar doongi.")
+            return self._t(conv, f"Here are the details: {dig.get('title')} — {_first_sentence(dig.get('summary'))} {dig.get('actionable', '').rstrip('.')}. Reply CONFIRM and I'll add it to your calendar.",
+                           f"Details yeh rahe: {dig.get('title')} — {_first_sentence(dig.get('summary'))} {dig.get('actionable', '').rstrip('.')}. CONFIRM reply karein, calendar mein add kar doongi.")
         if d in ("renewal+refresh", "reactivation+winback"):
             return self._t(conv, "Done — I've started it. Next: you'll get the payment confirmation here, and I'll refresh your photos and post an offer the same day. Reply CONFIRM to proceed.",
                            "Done — process shuru kar diya hai. Next: payment confirmation yahin aayega, aur usi din photos refresh + offer post kar doongi. Aage badhne ke liye CONFIRM reply karein.")
@@ -507,6 +507,15 @@ class ReplyEngine:
             note = f"{kind.capitalize()} update from {where}: we're open and ready to help" + (f" — {offer}" if offer else "") + "."
             return self._t(conv, f"Here's the customer update: \"{note}\" Reply CONFIRM and I'll send it out.",
                            f"Customer update yeh raha: \"{note}\" CONFIRM reply karein, bhej doongi.")
+        if d == "differentiation_post":
+            quote = next((t.get("common_quote") for t in merchant.get("review_themes") or []
+                          if t.get("sentiment") == "pos" and t.get("common_quote")), None)
+            praise = next((humanize(t.get("theme")) for t in merchant.get("review_themes") or []
+                           if t.get("sentiment") == "pos" and (t.get("occurrences_30d") or 0) >= 5), None)
+            lead = f"Our customers say: '{quote}'." if quote else (f"Loved for our {praise}." if praise else "Trusted by our neighbourhood.")
+            note = f"{where} — {lead}" + (f" {offer}." if offer else "") + " Message us to book."
+            return self._t(conv, f"Here's the post, leading with your strength rather than price: \"{note}\" Reply CONFIRM and it goes live today.",
+                           f"Post yeh raha — price nahi, aapki strength pe: \"{note}\" CONFIRM reply karein, aaj live kar doongi.")
         if d == "winback_campaign":
             note = f"We miss you at {where}!" + (f" {offer} this week" if offer else " Come by this week") + " — reply to book."
             return self._t(conv, f"Here's the win-back note: \"{note}\" Reply CONFIRM and it goes to your lapsed customers.",
@@ -526,9 +535,16 @@ class ReplyEngine:
             "registration_details": ("Done ✅ — it's in your calendar.", "Done ✅ — calendar mein add ho gaya."),
             "customer_reminder": ("Done ✅ — the reminder has gone out from your number.", "Done ✅ — reminder aapke number se chala gaya."),
         }.get(d, ("Done ✅ — it's live.", "Done ✅ — live ho gaya."))
+        if d in self.SELF_CONTAINED:
+            conv.meta["stage"] = 4
+            return self._t(conv, f"{done_en} Nothing else needed from you — I'll flag anything that changes.",
+                           f"{done_hi} Aapko aur kuch nahi karna — kuch badla toh main bata doongi.")
         nxt_en, nxt_hi = ("Next: a WhatsApp status version + a 2-line reply your staff can paste when customers ask. Want both?",
                           "Next: ek WhatsApp status version + customers ke sawaal ke liye 2-line ready reply. Dono bhej doon?")
         return self._t(conv, f"{done_en} {nxt_en}", f"{done_hi} {nxt_hi}")
+
+    SELF_CONTAINED = {"compliance_checklist", "registration_details", "renewal+refresh", "reactivation+winback",
+                      "gbp_verification", "customer_reminder", "recall_customer_note", "review_replies"}
 
     def _second_artifact(self, conv: Conversation) -> str:
         category, merchant, trigger, customer = self._contexts(conv)
@@ -537,9 +553,10 @@ class ReplyEngine:
         offer = _best_offer(build_ctx(category, merchant, trigger, customer, None)) if merchant else ""
         note = conv.meta.get("artifact_note")
         if note:
-            first = re.split(r"(?<=[.!?])\s+", note)[0]
-            status = first if len(first) <= 140 else first[:137].rsplit(" ", 1)[0] + "…"
-            reply = f"Thanks for asking! {first} Share a time that suits you and we'll take care of it."
+            first = _first_sentence(note, 140)
+            status = first
+            reply = (f"Thanks for asking! {offer} is on right now — share a time that suits you and we'll book it."
+                     if offer else "Thanks for asking! Share a time that suits you and we'll take care of it.")
         else:
             status = f"{offer} at {name} — message us to book!" if offer else f"New this week at {name} — message us to know more!"
             reply = f"Thanks for asking! {offer} is available right now — share a time and we'll book you in." if offer else \
